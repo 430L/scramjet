@@ -45,6 +45,7 @@ export const defaultConfig: AkConfig = {
 		allowFailedIntercepts: false,
 		encapsulateWorkers: true,
 		debugSourceURL: false,
+		confineNavigation: true,
 	},
 	siteFlags: {},
 	maskedfiles: [],

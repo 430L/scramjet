@@ -28,6 +28,17 @@ export type AkFlags = {
 	debugTrampolines: boolean;
 	debugSourceURL: boolean;
 	encapsulateWorkers: boolean;
+	/**
+	 * When true, every navigation stays inside the current proxy frame:
+	 * - target="_blank"/_new on <a>/<form> is stripped so links load in place.
+	 * - window.open(url, ...) becomes self.location = rewritten(url).
+	 * - Middle-click / ctrl-click new-tab is prevented.
+	 * Use this when the proxy is embedded (e.g. an about:blank trampoline
+	 * iframe) and any new tab or top-level navigation would break the
+	 * embed. Also removes the need for the CatchEscapedLinksPlugin 302,
+	 * which was the primary redirect vector for embedded setups.
+	 */
+	confineNavigation: boolean;
 };
 
 export interface AkConfig {

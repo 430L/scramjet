@@ -4,10 +4,7 @@ import {
 	type Component,
 	createState,
 } from "dreamland/core";
-import {
-	CatchEscapedLinksPlugin,
-	UrlWatcherPlugin,
-} from "@mercuryworkshop/scramjet-utils";
+import { UrlWatcherPlugin } from "@mercuryworkshop/scramjet-utils";
 import { versionInfo } from "@mercuryworkshop/scramjet";
 import { cachePlugin, controller } from "..";
 import { demoSettingsStore } from "../store";
@@ -157,12 +154,16 @@ const BrowserView: Component<
 		let urlWatcher = new UrlWatcherPlugin((url) => {
 			browserState.url = url;
 		});
-		let catchEscapedLinks = new CatchEscapedLinksPlugin(
-			(url) =>
-				new URL(`/?goto=${encodeURIComponent(url.href)}`, location.origin)
-		);
+		// CatchEscapedLinksPlugin is intentionally NOT installed: it returned
+		// a 302 to <origin>/?goto=<url> for every top-level (document-dest)
+		// navigation, which becomes a real top-level browser navigation. That
+		// broke embedded setups (e.g. an about:blank trampoline iframe hosting
+		// the proxy) — the trampoline itself would follow the redirect and
+		// expose the underlying origin. The confineNavigation flag on the
+		// runtime config instead keeps every navigation inside the proxy
+		// frame (target=_blank stripped, window.open becomes in-frame nav).
 		browserState.frame = controller.createFrame(this.frameel, {
-			plugins: [cachePlugin, urlWatcher, catchEscapedLinks],
+			plugins: [cachePlugin, urlWatcher],
 		});
 		let realHomepage = homepage;
 		realHomepage = realHomepage.replaceAll(
