@@ -9,6 +9,7 @@
 // to wss://<host>/wisp/ with no CORS and no cross-origin config. The build
 // step bakes that same-origin URL into the demo via VITE_WISP_URL.
 
+import fs from "node:fs";
 import http from "node:http";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -23,6 +24,26 @@ const PORT = Number(process.env.PORT) || 8080;
 // runtime so a deployment can rotate it without a rebuild.
 const WISP_PATH = process.env.WISP_PATH || "/api/socket/";
 const STATIC_DIR = path.join(__dirname, "packages", "demo", "dist");
+
+// Boot-time sanity check. When the vite copy step misplaces a file, the
+// SPA fallback would silently return index.html for it — the browser then
+// parses HTML as JS/WASM and the demo boots to a black screen with no
+// visible error. Log a clear warning so the failure mode is discoverable
+// in Render's deploy logs. Kept non-fatal so /healthz still works.
+const REQUIRED_ASSETS = [
+	"index.html",
+	"static/chunks/main.js",
+	"static/chunks/main.wasm",
+	"static/chunks/runtime.api.js",
+	"static/chunks/runtime.inject.js",
+	"static/chunks/runtime.sw.js",
+];
+for (const rel of REQUIRED_ASSETS) {
+	const abs = path.join(STATIC_DIR, rel);
+	if (!fs.existsSync(abs)) {
+		console.error(`Missing required asset: ${abs}`);
+	}
+}
 
 const app = express();
 
@@ -61,7 +82,20 @@ app.get("/healthz", (_req, res) => {
 // Single-page-app fallback: anything that isn't a real file gets the shell.
 // Proxied requests are handled by the service worker in the browser and
 // never reach this server.
-app.get(/.*/, (_req, res) => {
+//
+// Exception: requests for real asset extensions (.js/.mjs/.wasm/.css/
+// .map/.json/.png/.svg/.ico/.woff2) return a real 404 instead of the
+// shell HTML. Otherwise a missing file would come back as index.html
+// under the wrong Content-Type — the browser parses HTML as JS and the
+// demo silent-fails (see boot-time asset check above). A real 404
+// surfaces the misplaced file immediately in DevTools.
+const ASSET_EXTENSIONS =
+	/\.(?:js|mjs|wasm|css|map|json|png|svg|ico|jpg|jpeg|gif|webp|woff2?|ttf|otf|eot)$/i;
+app.get(/.*/, (req, res) => {
+	if (ASSET_EXTENSIONS.test(req.path)) {
+		res.status(404).type("text/plain").send("Not Found");
+		return;
+	}
 	res.sendFile(path.join(STATIC_DIR, "index.html"));
 });
 
