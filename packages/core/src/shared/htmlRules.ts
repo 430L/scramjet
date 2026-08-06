@@ -1,7 +1,7 @@
 import { rewriteCss } from "@rewriters/css";
 import { rewriteHtml, rewriteSrcset } from "@rewriters/html";
 import { rewriteUrl, unrewriteBlob, URLMeta } from "@rewriters/url";
-import { AkContext } from "@/shared";
+import { AkContext, flagEnabled } from "@/shared";
 import { _URL } from "./snapshot";
 
 export const htmlRules: {
@@ -121,12 +121,26 @@ export const htmlRules: {
 	},
 	{
 		fn: (value, context, meta) => {
+			// When confineNavigation is on, any target that would break out
+			// of the current frame (a new tab or an ancestor frame) collapses
+			// to the current frame. Keeps navigation inside embedded setups
+			// (e.g. an about:blank trampoline iframe hosting the proxy).
+			if (
+				flagEnabled("confineNavigation", context, meta.base) &&
+				(value === "_blank" ||
+					value === "_new" ||
+					value === "_top" ||
+					value === "_unfencedTop" ||
+					value === "_parent")
+			) {
+				return null;
+			}
 			if (value === "_top" || value === "_unfencedTop")
 				return meta.topFrameName;
 			else if (value === "_parent") return meta.parentFrameName;
 			else return value;
 		},
-		target: ["a", "base"],
+		target: ["a", "base", "form"],
 	},
 	{
 		// svg elements with an href property

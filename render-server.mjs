@@ -26,6 +26,18 @@ const STATIC_DIR = path.join(__dirname, "packages", "demo", "dist");
 
 const app = express();
 
+// Explicitly opt-in to being framed from any origin. Without this a
+// hardening proxy or CDN in front may inject X-Frame-Options: SAMEORIGIN
+// or Content-Security-Policy: frame-ancestors 'self', which breaks
+// embedded setups (e.g. an about:blank trampoline iframe hosting the
+// proxy). We overwrite whatever upstream set.
+app.use((_req, res, next) => {
+	res.removeHeader("X-Frame-Options");
+	res.removeHeader("Content-Security-Policy");
+	res.setHeader("Content-Security-Policy", "frame-ancestors *");
+	next();
+});
+
 // Serve the built demo. express.static already sends the correct
 // Content-Type for .wasm (application/wasm) and .mjs (text/javascript);
 // the explicit header below is belt-and-suspenders for older resolvers.

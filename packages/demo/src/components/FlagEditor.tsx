@@ -36,6 +36,8 @@ const flagDescriptions: Record<keyof AkFlags, string> = {
 	debugTrampolines: "Show wrapped api in stack traces (debug feature)",
 	debugSourceURL:
 		"Make debugger recognize javascript source urls consistently (debug feature)",
+	confineNavigation:
+		"Keep every navigation inside the current proxy frame (strips target=_blank, redirects window.open to in-frame nav) — required for embedded/trampoline setups",
 };
 
 const FlagEditor: Component<

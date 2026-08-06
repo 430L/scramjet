@@ -10,6 +10,17 @@ export default function (client: AkClient) {
 				const url = String(ctx.args[0]);
 				// blank also opens an about:blank window
 				if (url !== "") {
+					// When confineNavigation is on, redirect the current
+					// window instead of spawning a new one — a new tab would
+					// escape any embedded proxy shell (e.g. an about:blank
+					// trampoline iframe) and load the raw proxy origin.
+					if (client.flagEnabled("confineNavigation")) {
+						// Set the real (unproxied) location on the current window.
+						// This runs inside the scramjet client which itself uses
+						// unwrapped globals, so self.location is native.
+						self.location.href = client.rewriteUrl(url);
+						return ctx.return(self);
+					}
 					// note that null or anything else will *not* open an about:blank window
 					ctx.args[0] = client.rewriteUrl(url);
 				}
