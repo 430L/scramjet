@@ -1,0 +1,163 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<meta charset="utf-8">
+	<title>Launcher</title>
+	<meta name="viewport" content="width=device-width,initial-scale=1">
+	<style>
+		html, body {
+			margin: 0;
+			padding: 0;
+			height: 100%;
+			background: #0f0f0f;
+			color: #e5e7eb;
+			font-family: system-ui, -apple-system, sans-serif;
+		}
+		#launcher {
+			display: flex;
+			flex-direction: column;
+			align-items: center;
+			justify-content: center;
+			height: 100%;
+			gap: 1em;
+		}
+		#launcher button {
+			background: #1a1a1a;
+			border: 1px solid #2a2a2a;
+			color: #e5e7eb;
+			padding: 0.75em 1.5em;
+			border-radius: 6px;
+			font-size: 1em;
+			cursor: pointer;
+		}
+		#launcher button:hover { background: #222; }
+		#launcher p { max-width: 32em; color: #8f8f8f; text-align: center; }
+	</style>
+</head>
+<body>
+	<!--
+		Canonical trampoline launcher.
+
+		The invariant this file protects: **the URL bar of the launched tab
+		stays on `about:blank` forever, regardless of what proxied content
+		tries to do.** Two layers make that hold:
+
+		1. TRAMPOLINE PATTERN.
+		   A user gesture (the Launch button) calls
+		   `window.open("about:blank")`. The browser opens a new tab whose
+		   document.location is literally about:blank. We then
+		   `document.write` a minimal shell into that tab containing a
+		   single <iframe> pointing at the proxy origin. The outer document
+		   never navigates, so the URL bar keeps showing about:blank
+		   permanently.
+
+		2. IFRAME SANDBOX (the load-bearing part).
+		   The injected iframe carries `sandbox="…"` WITHOUT the tokens that
+		   let content escape:
+		     - allow-top-navigation
+		     - allow-top-navigation-by-user-activation
+		     - allow-top-navigation-to-custom-protocols
+		     - allow-popups
+		     - allow-popups-to-escape-sandbox
+		   Without those, the BROWSER (not the runtime) physically refuses
+		   to let content inside the iframe change the outer tab's URL, or
+		   open a new top-level tab that would expose the raw proxy origin.
+		   target=_blank on an anchor, `window.open`, `<meta http-equiv=
+		   refresh>`, `window.top.location =`, middle-click, ctrl-click —
+		   all blocked at the browser level.
+
+		   The tokens we DO grant are the minimum the proxy needs:
+		     allow-scripts               (all JS)
+		     allow-same-origin           (SW registration, cookies, storage)
+		     allow-forms                 (form submissions inside proxied sites)
+		     allow-modals                (alert / confirm / prompt)
+		     allow-downloads             (downloadable content)
+		     allow-storage-access-by-user-activation
+		     allow-pointer-lock          (games / canvas)
+		     allow-orientation-lock
+		     allow-presentation
+
+		The Scramjet runtime ALSO installs `confineNavigation` inside the
+		iframe so it never even *tries* to escape. Keep BOTH layers — the
+		sandbox is the physical guarantee, the runtime flag is the polite
+		defense. Removing either turns any bug in the other into a full
+		escape.
+
+		To customize: change PROXY_URL below.
+	-->
+	<div id="launcher">
+		<button id="go" type="button">Launch</button>
+		<p>Opens a new tab whose URL bar stays on <code>about:blank</code>.</p>
+	</div>
+	<script>
+		// Replace with your deployed proxy origin.
+		var PROXY_URL = "https://scramjet-3oyx.onrender.com/";
+
+		// The sandbox tokens listed here are load-bearing. Do NOT add
+		// allow-top-navigation, allow-top-navigation-by-user-activation,
+		// allow-top-navigation-to-custom-protocols, allow-popups, or
+		// allow-popups-to-escape-sandbox — any one of them lets proxied
+		// content take over the outer tab's URL bar.
+		var SANDBOX = [
+			"allow-scripts",
+			"allow-same-origin",
+			"allow-forms",
+			"allow-modals",
+			"allow-downloads",
+			"allow-storage-access-by-user-activation",
+			"allow-pointer-lock",
+			"allow-orientation-lock",
+			"allow-presentation"
+		].join(" ");
+
+		function launch() {
+			// Must be inside the click handler for the popup-blocker
+			// heuristic to treat this as user-initiated.
+			var win = window.open("about:blank");
+			if (!win) {
+				alert("Popup blocked. Allow popups for this page and try again.");
+				return;
+			}
+
+			// Build the shell as an HTML string. document.write into the
+			// about:blank tab replaces its (empty) document with this shell.
+			// The outer tab's location stays about:blank because we never
+			// call win.location.href = anything.
+			//
+			// escapeAttr keeps a maliciously configured PROXY_URL from
+			// breaking out of the sandbox attribute. Same for the URL
+			// itself — anchoring the sandbox and src as attributes is
+			// safe as long as they can't be quote-escaped.
+			var html =
+				"<!DOCTYPE html>" +
+				"<html><head><meta charset=\"utf-8\"><title>Loading...</title>" +
+				"<style>html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;background:#0f0f0f}html,body{height:100vh;overflow:hidden}</style>" +
+				"</head><body>" +
+				"<iframe sandbox=\"" + escapeAttr(SANDBOX) + "\" src=\"" +
+				escapeAttr(PROXY_URL) + "\" allow=\"clipboard-read; clipboard-write\"></iframe>" +
+				"</body></html>";
+
+			try {
+				win.document.open();
+				win.document.write(html);
+				win.document.close();
+			} catch (e) {
+				// Extremely unlikely — same-origin about:blank inherits our
+				// origin so document.write is always allowed. If a future
+				// browser change breaks this, fall through and tell the user.
+				alert("Failed to initialise the launcher tab: " + e);
+			}
+		}
+
+		function escapeAttr(s) {
+			return String(s)
+				.replace(/&/g, "&amp;")
+				.replace(/"/g, "&quot;")
+				.replace(/</g, "&lt;")
+				.replace(/>/g, "&gt;");
+		}
+
+		document.getElementById("go").addEventListener("click", launch);
+	</script>
+</body>
+</html>

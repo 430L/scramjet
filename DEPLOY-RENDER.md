@@ -134,6 +134,38 @@ its URL, then build the static site with `VITE_WISP_URL=wss://<wisp-host>/api/so
 and the two origins differ so the Wisp server must send permissive CORS. For most
 people the single service in this guide is the better default.
 
+## Embedding via a trampoline launcher
+
+If you want the launched page to keep `about:blank` in its URL bar — a common
+setup for extensions or in-page launchers that want to hide the underlying
+proxy origin — use the canonical trampoline HTML at
+[`assets/launcher.html`](assets/launcher.html). Open it directly, or ship it
+as your launcher's built-in page.
+
+The pattern:
+
+1. A user gesture opens `window.open("about:blank")`.
+2. The launcher `document.write`s a minimal shell into that tab containing a
+   sandboxed `<iframe>` pointing at your deployed proxy origin.
+3. The outer tab's URL bar stays on `about:blank` forever, because the outer
+   document itself never navigates.
+
+The **sandbox attribute on the iframe is load-bearing**: it must NOT include
+`allow-top-navigation`, `allow-top-navigation-by-user-activation`,
+`allow-top-navigation-to-custom-protocols`, `allow-popups`, or
+`allow-popups-to-escape-sandbox`. Any one of those tokens gives proxied
+content a physical path to change the outer tab's URL bar or open a new
+top-level tab exposing the raw proxy origin. The template lists the exact
+minimal set of tokens (`allow-scripts allow-same-origin allow-forms
+allow-modals allow-downloads allow-storage-access-by-user-activation
+allow-pointer-lock allow-orientation-lock allow-presentation`) — start from
+those and only widen if a feature you use is broken. The Scramjet runtime
+also installs an in-process `confineNavigation` guard, but the sandbox is
+the browser-enforced physical guarantee; keep both.
+
+Edit the `PROXY_URL` variable in the launcher HTML to point at your own
+deployed origin (e.g. `https://<your-app>.onrender.com/`).
+
 ## A note on acceptable use
 
 Scramjet is designed to bypass network restrictions and relay arbitrary web

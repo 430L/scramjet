@@ -14,8 +14,15 @@ const flagStore = createStore<AkFlags>(
 	}
 );
 
-// Flag descriptions for better UX
-const flagDescriptions: Record<keyof AkFlags, string> = {
+// confineNavigation is load-bearing for embedded/trampoline setups: turning it
+// off lets proxied content escape the outer tab and reveal the raw proxy URL.
+// Strip any persisted override at load time and force it back to true so a
+// stale localStorage entry can't disable it.
+flagStore.confineNavigation = true;
+
+// Flag descriptions for better UX. confineNavigation is intentionally absent so
+// it doesn't render as a user-toggleable checkbox in the editor.
+const flagDescriptions: Partial<Record<keyof AkFlags, string>> = {
 	syncxhr: "Enable synchronous XMLHttpRequest support",
 	disableComputedWrap: "Skip deep js wrapping for better runtime speed",
 	cleanErrors: "prevent sites from noticing runtime stack frames",
@@ -36,8 +43,6 @@ const flagDescriptions: Record<keyof AkFlags, string> = {
 	debugTrampolines: "Show wrapped api in stack traces (debug feature)",
 	debugSourceURL:
 		"Make debugger recognize javascript source urls consistently (debug feature)",
-	confineNavigation:
-		"Keep every navigation inside the current proxy frame (strips target=_blank, redirects window.open to in-frame nav) — required for embedded/trampoline setups",
 };
 
 const FlagEditor: Component<
@@ -55,14 +60,18 @@ const FlagEditor: Component<
 
 	const toggleFlag = (flag: keyof AkFlags, value: boolean) => {
 		flagStore[flag] = value;
+		flagStore.confineNavigation = true;
 		Object.assign(controller.runtimeConfig.flags, flagStore);
+		controller.runtimeConfig.flags.confineNavigation = true;
 	};
 
 	const resetToDefaults = () => {
 		Object.assign(flagStore, {
 			...defaultConfigDev.flags,
 		});
+		flagStore.confineNavigation = true;
 		Object.assign(controller.runtimeConfig.flags, flagStore);
+		controller.runtimeConfig.flags.confineNavigation = true;
 	};
 
 	const bustCache = async () => {
@@ -80,7 +89,9 @@ const FlagEditor: Component<
 	};
 	cx.mount = async () => {
 		await controller.wait();
+		flagStore.confineNavigation = true;
 		Object.assign(controller.runtimeConfig.flags, flagStore);
+		controller.runtimeConfig.flags.confineNavigation = true;
 	};
 
 	return (
@@ -114,8 +125,9 @@ const FlagEditor: Component<
 						<div class="cache-bust-status">{use(this.cacheBustStatus)}</div>
 					)}
 					<div class="flags-list">
-						{(Object.keys(flagStore) as Array<keyof AkFlags>).map(
-							(flag) => (
+						{(Object.keys(flagStore) as Array<keyof AkFlags>)
+							.filter((flag) => flag !== "confineNavigation")
+							.map((flag) => (
 								<label class="flag-item">
 									<input
 										type="checkbox"
@@ -129,8 +141,7 @@ const FlagEditor: Component<
 										<span class="flag-desc">{flagDescriptions[flag]}</span>
 									</div>
 								</label>
-							)
-						)}
+							))}
 					</div>
 				</div>
 			)}

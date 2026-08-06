@@ -908,6 +908,11 @@ return { apply, construct };
 		const cached = this.flagCache.get(flag);
 		if (cached !== undefined) return cached;
 
+		// The cache freezes the first observed value of a flag for the
+		// client's lifetime, which is only safe for flags whose value can't
+		// legitimately change at runtime. `confineNavigation` is forced true
+		// at the demo layer (FlagEditor strips any persisted override before
+		// applying runtimeConfig.flags), so caching it here is fine.
 		const result = flagEnabled(flag, this.context, this.url);
 		this.flagCache.set(flag, result);
 		return result;

@@ -58,6 +58,43 @@ function rewriteLinkHeader(
 	});
 }
 
+/**
+ * Rewrite the URL portion of a `Refresh:` response header.
+ *
+ * Grammar (HTTP-style, matching browser behaviour of the equivalent
+ * `<meta http-equiv="refresh">`): a non-negative delay in seconds, optionally
+ * followed by `;` or `,`, then optional whitespace, then `url=` (case
+ * insensitive) then the URL. The URL may be bare, single-quoted, or
+ * double-quoted. Missing `url=` means "reload the current page" — in that
+ * case there is no URL to rewrite; pass the header through unchanged.
+ *
+ * Without this rewrite, a proxied response returning `Refresh: 0;url=…`
+ * would trigger a real top-level browser navigation to the raw target URL,
+ * escaping any confineNavigation guard the runtime installs on the page.
+ */
+function rewriteRefreshHeader(
+	refresh: string,
+	context: AkContext,
+	meta: URLMeta
+): string {
+	const match = /^(\s*[0-9.]+\s*[;,]?\s*url\s*=\s*)(.*)$/i.exec(refresh);
+	if (!match) return refresh;
+	const prefix = match[1];
+	let rest = match[2];
+	// Peel a matching pair of surrounding quotes, if any.
+	let quote = "";
+	if (rest.length >= 2 && (rest[0] === '"' || rest[0] === "'")) {
+		const q = rest[0];
+		const end = rest.lastIndexOf(q);
+		if (end > 0) {
+			quote = q;
+			rest = rest.slice(1, end);
+		}
+	}
+	const rewritten = rewriteUrl(rest, context, meta);
+	return `${prefix}${quote}${rewritten}${quote}`;
+}
+
 export async function rewriteResponseHeaders(
 	handler: AkFetchHandler,
 	request: AkFetchRequest,
@@ -82,6 +119,16 @@ export async function rewriteResponseHeaders(
 		const link = headers.get("link")!;
 		const rewritten = rewriteLinkHeader(link, handler.context, parsed.meta);
 		headers.set("link", rewritten);
+	}
+
+	if (headers.has("refresh")) {
+		const refresh = headers.get("refresh")!;
+		const rewritten = rewriteRefreshHeader(
+			refresh,
+			handler.context,
+			parsed.meta
+		);
+		headers.set("refresh", rewritten);
 	}
 
 	if (headers.get("accept") === "text/event-stream") {

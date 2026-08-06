@@ -4,6 +4,82 @@ import { rewriteUrl, unrewriteBlob, URLMeta } from "@rewriters/url";
 import { AkContext, flagEnabled } from "@/shared";
 import { _URL } from "./snapshot";
 
+// Sandbox tokens that let iframe content change the ancestor tab's URL or open
+// a new top-level browsing context. When confineNavigation is on we always
+// merge these OUT of any incoming iframe sandbox so nested iframes inside a
+// proxied page can't be used as an escape vector.
+const FORBIDDEN_SANDBOX_TOKENS = [
+	"allow-top-navigation",
+	"allow-top-navigation-by-user-activation",
+	"allow-top-navigation-to-custom-protocols",
+	"allow-popups",
+	"allow-popups-to-escape-sandbox",
+];
+
+/**
+ * Apply the confineNavigation `target` filter to a value coming from either
+ * an HTML attribute (`<a target="…">`) or an element property setter
+ * (`a.target = "…"`, `form.target = "…"`, `input.formTarget = "…"`, …).
+ *
+ * Returns `null` when the value would break out of the current frame and must
+ * be dropped; returns a possibly-remapped string otherwise. Callers that
+ * receive `null` should treat it as "attribute removed" (setAttribute path)
+ * or "coerce the property to `""`" (property-setter path).
+ */
+export function filterTarget(
+	value: string,
+	context: AkContext,
+	meta: URLMeta
+): string | null {
+	// When confineNavigation is on, ANY target that isn't the current frame
+	// escapes — hardcoded names like _blank/_top/_parent open a new tab or an
+	// ancestor context, and arbitrary named targets like "mywindow" or "_new2"
+	// open a NEW top-level browsing context loading the raw proxy URL. Strip
+	// everything except the two forms that stay in the current frame: an
+	// empty string and the reserved "_self" keyword.
+	if (
+		flagEnabled("confineNavigation", context, meta.base) &&
+		value !== "" &&
+		value !== "_self"
+	) {
+		return null;
+	}
+	if (value === "_top" || value === "_unfencedTop") return meta.topFrameName;
+	else if (value === "_parent") return meta.parentFrameName;
+	else return value;
+}
+
+/**
+ * Apply the confineNavigation policy to an iframe sandbox attribute value.
+ * Merges the forbidden tokens out of the incoming value rather than dropping
+ * the attribute entirely. Preserves the site's own restrictions and adds
+ * ours on top; an incoming `undefined`/`""` still returns a restrictive
+ * sandbox rather than removing the attribute (which would grant *more*
+ * permissions than the site asked for).
+ */
+export function filterSandbox(
+	value: string,
+	context: AkContext,
+	meta: URLMeta
+): string {
+	const flagOn = flagEnabled("confineNavigation", context, meta.base);
+	// Whitespace-split per the HTML spec's ASCII whitespace set.
+	const tokens = (value || "")
+		.split(/[\t\n\f\r ]+/)
+		.filter((t) => t.length > 0);
+
+	if (!flagOn) {
+		// Preserve the site's original sandbox (or lack of one, represented
+		// as an empty string) instead of the previous behavior of stripping
+		// the whole attribute.
+		return tokens.join(" ");
+	}
+
+	const forbidden = new Set(FORBIDDEN_SANDBOX_TOKENS.map((t) => t.toLowerCase()));
+	const kept = tokens.filter((t) => !forbidden.has(t.toLowerCase()));
+	return kept.join(" ");
+}
+
 export const htmlRules: {
 	[key: string]: "*" | string[] | ((...any: any[]) => string | null);
 	fn: (
@@ -53,10 +129,12 @@ export const htmlRules: {
 		src: ["iframe"],
 	},
 	{
-		// is this a good idea?
-		fn: (_value, _context, _meta) => {
-			return null;
-		},
+		// Merge our forbidden tokens out of the incoming sandbox instead of
+		// deleting the attribute wholesale. Stripping would remove any
+		// site-defined restrictions (widening the surface), and would let a
+		// nested proxied iframe declare `allow-top-navigation` and hijack the
+		// ancestor tab. Preserving + merging tightens rather than widens.
+		fn: (value, context, meta) => filterSandbox(value, context, meta),
 		sandbox: ["iframe"],
 	},
 	{
@@ -120,27 +198,20 @@ export const htmlRules: {
 		style: "*",
 	},
 	{
-		fn: (value, context, meta) => {
-			// When confineNavigation is on, any target that would break out
-			// of the current frame (a new tab or an ancestor frame) collapses
-			// to the current frame. Keeps navigation inside embedded setups
-			// (e.g. an about:blank trampoline iframe hosting the proxy).
-			if (
-				flagEnabled("confineNavigation", context, meta.base) &&
-				(value === "_blank" ||
-					value === "_new" ||
-					value === "_top" ||
-					value === "_unfencedTop" ||
-					value === "_parent")
-			) {
-				return null;
-			}
-			if (value === "_top" || value === "_unfencedTop")
-				return meta.topFrameName;
-			else if (value === "_parent") return meta.parentFrameName;
-			else return value;
-		},
+		// When confineNavigation is on, any target that would break out of
+		// the current frame collapses to the current frame. This covers the
+		// hardcoded keywords AND arbitrary named targets ("mywindow"),
+		// which open a NEW top-level browsing context and are equally
+		// dangerous for embedded/trampoline setups.
+		fn: (value, context, meta) => filterTarget(value, context, meta),
 		target: ["a", "base", "form"],
+	},
+	{
+		// formtarget on submit-capable elements has the same escape potential
+		// as form.target — a button/input with formtarget="_top" submits into
+		// the ancestor tab.
+		fn: (value, context, meta) => filterTarget(value, context, meta),
+		formtarget: ["button", "input"],
 	},
 	{
 		// svg elements with an href property
