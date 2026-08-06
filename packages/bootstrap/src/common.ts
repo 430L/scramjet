@@ -48,17 +48,22 @@ export type BootstrapOptions = {
 export const defaultConfig: Partial<BootstrapOptions> = {
 	transport: "libcurl",
 	swPath: "/sw.js",
-	wispPath: "/wisp/",
+	// Non-fingerprintable websocket path. Change to rotate if a deployment
+	// starts getting flagged for the URL alone.
+	wispPath: "/api/socket/",
 
-	epoxyClientPath: "/clients/epoxy-client.js",
-	libcurlClientPath: "/clients/libcurl-client.js",
-	bareClientPath: "/clients/bare-client.js",
-	bootstrapInitPath: "/bootstrap-init.js",
+	epoxyClientPath: "/static/vendor/ep-client.js",
+	libcurlClientPath: "/static/vendor/lc-client.js",
+	bareClientPath: "/static/vendor/br-client.js",
+	bootstrapInitPath: "/static/chunks/boot.js",
 
-	scramjetControllerApiPath: "/assets/core.api.js",
-	scramjetControllerInjectPath: "/assets/core.inject.js",
-	scramjetControllerSwPath: "/assets/core.sw.js",
-	scramjetBundlePath: "/assets/app.js",
-	scramjetWasmPath: "/assets/app.wasm",
-	scramjetUtilsBundlePath: "/assets/app-utils.js",
+	// Paths are deliberately named to blend in with a typical bundled SPA
+	// (Next.js/Vite-style /static/chunks) rather than a proxy tuple that
+	// tips off pattern-matching filters.
+	scramjetControllerApiPath: "/static/chunks/framework.js",
+	scramjetControllerInjectPath: "/static/chunks/polyfills.js",
+	scramjetControllerSwPath: "/static/chunks/webpack.js",
+	scramjetBundlePath: "/static/chunks/main.js",
+	scramjetWasmPath: "/static/chunks/main.wasm",
+	scramjetUtilsBundlePath: "/static/chunks/vendor.js",
 };

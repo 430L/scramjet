@@ -18,13 +18,13 @@ The files in this repo set both up as **one Render web service** on a single
 origin:
 
 - `render-server.mjs` — serves the built demo *and* answers Wisp WebSocket
-  connections at `/wisp/`.
+  connections at `/api/socket/`.
 - `render-build.sh` — installs the Rust/WASM toolchain, builds the rewriter,
   the bundles, and the static demo.
 - `render.yaml` — a Render "Blueprint" so the whole thing deploys in one click.
 
 Putting the frontend and Wisp on the same origin means the demo connects to
-`wss://<your-app>.onrender.com/wisp/` with no CORS and no separate URL to
+`wss://<your-app>.onrender.com/api/socket/` with no CORS and no separate URL to
 configure — the build bakes that address in automatically from Render's
 `RENDER_EXTERNAL_HOSTNAME`.
 
@@ -48,7 +48,7 @@ configure — the build bakes that address in automatically from Render's
    the Rust rewriter to WebAssembly.
 5. When the build finishes, open the URL Render gives you
    (`https://scramjet-xxxx.onrender.com`). The demo loads and is already pointed
-   at its own `/wisp/` endpoint.
+   at its own `/api/socket/` endpoint.
 
 ## Option B — Manual web service
 
@@ -107,7 +107,7 @@ override the Wisp URL from its in-app **Settings** page if you ever need to.
 - **Page loads but nothing proxies / "Wisp URL is required".** The demo needs
   `VITE_WISP_URL` baked in at build time. On Render this comes from
   `RENDER_EXTERNAL_HOSTNAME` automatically. If you build elsewhere, set
-  `VITE_WISP_URL=wss://your-host/wisp/` before running the build.
+  `VITE_WISP_URL=wss://your-host/api/socket/` before running the build.
 - **Mixed-content errors in the console.** The Wisp URL must be `wss://` (secure)
   on an HTTPS site. The build produces `wss://` automatically; only manual
   overrides risk getting this wrong.
@@ -130,7 +130,7 @@ that never sleeps, you can instead split it:
 
 The trade-offs: the Wisp service still spins down (so the proxy still cold-starts
 even if the page loads instantly), you'll deploy the Wisp service first to learn
-its URL, then build the static site with `VITE_WISP_URL=wss://<wisp-host>/wisp/`,
+its URL, then build the static site with `VITE_WISP_URL=wss://<wisp-host>/api/socket/`,
 and the two origins differ so the Wisp server must send permissive CORS. For most
 people the single service in this guide is the better default.
 

@@ -11,7 +11,11 @@ export const AVAILABLE_TRANSPORTS: ReadonlyArray<{
 ];
 const DEFAULT_WISP_URL = import.meta.env.VITE_WISP_URL;
 const DEFAULT_TRANSPORT: AvailableTransports = "libcurl";
-const DEFAULT_HOME_URL = "https://google.com";
+// Show an empty URL bar on first load rather than auto-populating a real
+// hostname; the placeholder text guides the user. Auto-filling a well-known
+// domain (google.com, etc.) is a hint that this is a proxy landing page and
+// tends to be an early input to categorizer feature vectors.
+const DEFAULT_HOME_URL = "";
 const DEFAULT_MAX_REQUESTS = 200;
 
 export const demoSettingsStore = createStore(
@@ -52,9 +56,8 @@ export function normalizeWispUrl(value: string) {
 
 export function normalizeHomeUrl(value: string) {
 	const trimmed = value.trim();
-	if (!trimmed) {
-		throw new TypeError("Home page URL is required.");
-	}
+	// Empty is allowed and means "no home URL" — the URL bar starts empty.
+	if (!trimmed) return "";
 
 	const normalized = /^[a-zA-Z][a-zA-Z\d+\-.]*:\/\//.test(trimmed)
 		? trimmed

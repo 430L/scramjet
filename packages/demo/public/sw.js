@@ -1,4 +1,4 @@
-importScripts("/assets/core.sw.js");
+importScripts("/static/chunks/runtime.sw.js");
 
 addEventListener("fetch", (e) => {
 	if ($akController.shouldRoute(e)) {

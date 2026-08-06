@@ -19,7 +19,9 @@ import { server as wisp } from "@mercuryworkshop/wisp-js/server";
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT) || 8080;
-const WISP_PATH = "/wisp/";
+// The websocket path is not a well-known filter signature. Overridable at
+// runtime so a deployment can rotate it without a rebuild.
+const WISP_PATH = process.env.WISP_PATH || "/api/socket/";
 const STATIC_DIR = path.join(__dirname, "packages", "demo", "dist");
 
 const app = express();

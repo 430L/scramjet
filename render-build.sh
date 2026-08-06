@@ -63,10 +63,15 @@ pnpm exec rspack build --mode production
 echo "==> Building the static demo"
 # The Wisp endpoint is same-origin. On Render, RENDER_EXTERNAL_HOSTNAME is set
 # during the build; fall back to VITE_WISP_URL if you host elsewhere.
+# The websocket path is intentionally not the classic /wisp/ signature.
+# WISP_PATH must match the server (see render-server.mjs). Rotate both if
+# a deployment gets fingerprinted.
+WISP_PATH_DEFAULT="/api/socket/"
+WISP_PATH_EFFECTIVE="${WISP_PATH:-$WISP_PATH_DEFAULT}"
 if [ -n "${RENDER_EXTERNAL_HOSTNAME:-}" ]; then
-	export VITE_WISP_URL="wss://${RENDER_EXTERNAL_HOSTNAME}/wisp/"
+	export VITE_WISP_URL="wss://${RENDER_EXTERNAL_HOSTNAME}${WISP_PATH_EFFECTIVE}"
 fi
-: "${VITE_WISP_URL:?VITE_WISP_URL must be set (e.g. wss://your-app.onrender.com/wisp/)}"
+: "${VITE_WISP_URL:?VITE_WISP_URL must be set (e.g. wss://your-app.onrender.com${WISP_PATH_EFFECTIVE})}"
 echo "    VITE_WISP_URL=${VITE_WISP_URL}"
 pnpm --filter @mercuryworkshop/scramjet-demo build
 

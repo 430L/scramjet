@@ -112,6 +112,25 @@ export default function (client: AkClient, _self: Self) {
 		},
 	});
 
+	// Freeze document.title to the spoofed value so extensions that classify
+	// tabs by title read the spoof instead of the target's real title.
+	// Empty spoofedTitle disables both sides (pass through to native).
+	client.Trap("Document.prototype.title", {
+		get(ctx) {
+			const spoofed = client.context.config.spoofedTitle;
+			if (spoofed) return spoofed;
+			return ctx.get();
+		},
+		set(ctx, value) {
+			const spoofed = client.context.config.spoofedTitle;
+			if (spoofed) {
+				// Swallow the write; readers still see the spoofed value.
+				return;
+			}
+			ctx.set(value);
+		},
+	});
+
 	client.Trap("Document.prototype.referrer", {
 		get() {
 			if (!client.history) return "";

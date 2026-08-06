@@ -388,6 +388,22 @@ function traverseParsedHtml(
 	if (node.name === "style" && node.children[0] !== undefined)
 		node.children[0].data = rewriteCss(node.children[0].data, context, meta);
 
+	// Replace the document's <title> text so extensions that classify a tab
+	// by its title (a common content-filter heuristic) see the spoofed value
+	// instead of the target site's real title. Empty means passthrough.
+	if (node.name === "title" && context.config.spoofedTitle) {
+		if (node.children[0] !== undefined && "data" in node.children[0]) {
+			node.children[0].data = context.config.spoofedTitle;
+		} else {
+			node.children = [
+				{
+					type: ElementType.Text,
+					data: context.config.spoofedTitle,
+				} as any,
+			];
+		}
+	}
+
 	if (
 		node.name === "script" &&
 		node.attribs.type?.toLowerCase() === "importmap" &&
