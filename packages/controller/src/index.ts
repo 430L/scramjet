@@ -46,30 +46,37 @@ export type Config = {
 };
 
 export const config: Config = {
-	prefix: "/a/",
-	corePath: "/assets/app.js",
-	injectPath: "/assets/core.inject.js",
-	wasmPath: "/assets/app.wasm",
-	virtualWasmPath: "app.wasm.js",
+	prefix: "/static/render/",
+	corePath: "/static/chunks/main.js",
+	injectPath: "/static/chunks/runtime.inject.js",
+	wasmPath: "/static/chunks/main.wasm",
+	virtualWasmPath: "chunk.wasm.js",
 	codec: {
+		// XOR-then-hex codec. The output looks like an opaque session token
+		// (lowercase hex) rather than URL-safe base64, so filters that sniff
+		// `atob(path)` for a decoded URL come up empty. The key is a fixed
+		// rotating byte sequence baked into the function; it's not a secret,
+		// but it's enough to make the encoded target not literally decode
+		// with any naive URL detector.
 		encode: (url: string) => {
 			if (!url) return url;
+			const key = [0x5b, 0xa3, 0x1f, 0xc7, 0x92, 0x4e, 0xd8, 0x71];
 			const bytes = new TextEncoder().encode(url);
-			let bin = "";
-			for (let i = 0; i < bytes.length; i++)
-				bin += String.fromCharCode(bytes[i]);
-			return btoa(bin)
-				.replace(/\+/g, "-")
-				.replace(/\//g, "_")
-				.replace(/=+$/, "");
+			let out = "";
+			for (let i = 0; i < bytes.length; i++) {
+				const v = bytes[i] ^ key[i & 7];
+				out += (v < 16 ? "0" : "") + v.toString(16);
+			}
+			return out;
 		},
 		decode: (url: string) => {
 			if (!url) return url;
-			let b64 = url.replace(/-/g, "+").replace(/_/g, "/");
-			while (b64.length % 4) b64 += "=";
-			const bin = atob(b64);
-			const bytes = new Uint8Array(bin.length);
-			for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+			const key = [0x5b, 0xa3, 0x1f, 0xc7, 0x92, 0x4e, 0xd8, 0x71];
+			const clean = url.replace(/[^0-9a-fA-F]/g, "");
+			const bytes = new Uint8Array(clean.length >> 1);
+			for (let i = 0; i < bytes.length; i++) {
+				bytes[i] = parseInt(clean.substr(i * 2, 2), 16) ^ key[i & 7];
+			}
 			return new TextDecoder().decode(bytes);
 		},
 	},
@@ -80,7 +87,7 @@ const runtimeConfig: Partial<AkConfig> = {
 		...scramjetDefaultConfig.flags,
 		allowFailedIntercepts: true,
 	},
-	maskedfiles: ["inject.js", "app.wasm.js"],
+	maskedfiles: ["inject.js", "chunk.wasm.js"],
 };
 
 type PersistedCookieState = {

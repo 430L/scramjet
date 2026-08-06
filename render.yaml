@@ -20,5 +20,10 @@ services:
       - key: PNPM_VERSION
         value: "10.12.1"
       # RENDER_EXTERNAL_HOSTNAME is injected automatically and is used at
-      # build time to bake wss://<host>/wisp/ into the demo. If you host
+      # build time to bake wss://<host><WISP_PATH> into the demo. If you host
       # somewhere without that variable, set VITE_WISP_URL here instead.
+      # The websocket endpoint path is intentionally NOT the classic /wisp/
+      # signature. Override WISP_PATH (build and runtime) to rotate it if a
+      # deployment starts getting fingerprinted.
+      - key: WISP_PATH
+        value: "/api/socket/"

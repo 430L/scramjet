@@ -48,6 +48,7 @@ export const defaultConfig: AkConfig = {
 	},
 	siteFlags: {},
 	maskedfiles: [],
+	spoofedTitle: "Console",
 };
 
 export const defaultConfigDev: AkConfig = {

@@ -76,6 +76,10 @@
 					serviceworker: sw,
 					transport,
 					config: {
+						// The harness pins the historical "/a/" prefix so its
+						// adversarial leakage assertions (which grep for "/a/")
+						// keep working regardless of the deployed default.
+						prefix: "/a/",
 						corePath: "/scramjet/scramjet.js",
 						injectPath: "/controller/controller.inject.js",
 						wasmPath: "/scramjet/scramjet.wasm",

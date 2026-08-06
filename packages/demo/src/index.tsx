@@ -98,10 +98,10 @@ async function init() {
 			transport: getTransport(),
 			runtimeConfig: defaultConfigDev,
 			config: {
-				corePath: "/assets/app.js",
-				injectPath: "/assets/core.inject.js",
-				wasmPath: "/assets/app.wasm",
-				virtualWasmPath: "app.wasm.js",
+				corePath: "/static/chunks/main.js",
+				injectPath: "/static/chunks/runtime.inject.js",
+				wasmPath: "/static/chunks/main.wasm",
+				virtualWasmPath: "chunk.wasm.js",
 			},
 		});
 		await controller.wait();

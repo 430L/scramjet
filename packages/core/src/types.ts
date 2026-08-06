@@ -48,6 +48,15 @@ export interface AkConfig {
 	flags: AkFlags;
 	siteFlags: Record<string, Partial<AkFlags>>;
 	maskedfiles: string[];
+	/**
+	 * If non-empty, every proxied document's <title> (both the initial HTML
+	 * <title> element and later writes via document.title) is replaced with
+	 * this string. Extensions that classify a tab by its document title —
+	 * a common content-filter path — see this constant instead of the
+	 * target site's actual title.
+	 * Set to an empty string to disable and pass the real title through.
+	 */
+	spoofedTitle: string;
 }
 
 /**

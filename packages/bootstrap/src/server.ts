@@ -103,7 +103,8 @@ function routeUpgrade(
 	head: Buffer
 ): boolean {
 	if (!req.url) return false;
-	if (!req.url.startsWith("/wisp/")) return false;
+	const wispPath = config?.wispPath || defaultConfig.wispPath!;
+	if (!req.url.startsWith(wispPath)) return false;
 
 	wisp.routeRequest(req, socket, head);
 	return true;

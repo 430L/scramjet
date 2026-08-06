@@ -21,6 +21,7 @@ export const browserState = createState({
 
 export const Omnibox: Component = function (cx) {
 	const navigate = () => {
+		if (!browserState.url.trim()) return;
 		if (!browserState.url.startsWith("http")) {
 			browserState.url = `https://${browserState.url}`;
 		}
