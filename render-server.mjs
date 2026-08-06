@@ -52,10 +52,23 @@ const app = express();
 // or Content-Security-Policy: frame-ancestors 'self', which breaks
 // embedded setups (e.g. an about:blank trampoline iframe hosting the
 // proxy). We overwrite whatever upstream set.
+//
+// The scheme list matters. Per the CSP spec (and Chrome's enforcement),
+// `frame-ancestors *` matches only network schemes — http, https, ws,
+// wss. It does NOT match file:, data:, blob:, or about:. A trampoline
+// opened from a launcher.html on disk (file://) creates an about:blank
+// popup that inherits the file: scheme; when its iframe requests this
+// origin, Chrome checks the ancestor chain, sees a non-network scheme,
+// and refuses with "refused to connect". The same trap catches blob:
+// and data: launchers. Enumerate every scheme we want to allow rather
+// than relying on `*`.
 app.use((_req, res, next) => {
 	res.removeHeader("X-Frame-Options");
 	res.removeHeader("Content-Security-Policy");
-	res.setHeader("Content-Security-Policy", "frame-ancestors *");
+	res.setHeader(
+		"Content-Security-Policy",
+		"frame-ancestors * data: blob: file: about:"
+	);
 	next();
 });
 
