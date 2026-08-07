@@ -70,6 +70,33 @@ export default function (client: AkClient, self: typeof window) {
 		}
 		if (!href) return;
 
+		// Only hijack navigations the browser would actually open as a new
+		// top-level tab: same-origin http(s) URLs (which is what a rewritten
+		// proxy URL looks like). Skip anchor-only fragments (`#section`),
+		// mailto:, tel:, javascript:, blob:, data:, and cross-origin URLs
+		// so we don't turn a modifier-click into a full navigation the
+		// browser would otherwise have ignored or handed to another app.
+		let resolved: URL;
+		try {
+			resolved = new URL(href, self.location.href);
+		} catch {
+			return;
+		}
+		if (resolved.protocol !== "http:" && resolved.protocol !== "https:") {
+			return;
+		}
+		if (resolved.origin !== self.location.origin) return;
+		// A fragment-only link that resolves to the current page + anchor
+		// isn't a new-tab navigation the browser would open a fresh tab for
+		// in a meaningful way; let the browser handle it.
+		if (
+			resolved.pathname === self.location.pathname &&
+			resolved.search === self.location.search &&
+			resolved.hash !== ""
+		) {
+			return;
+		}
+
 		event.preventDefault();
 		event.stopPropagation();
 		// Same-frame navigation. Since href is already a rewritten proxy URL,
