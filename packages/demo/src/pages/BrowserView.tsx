@@ -196,10 +196,7 @@ const BrowserView: Component<
 				(active) => `tab-panel browser-view ${active ? "active" : ""}`
 			)}
 		>
-			<iframe
-				this={use(this.frameel)}
-				sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-storage-access-by-user-activation allow-pointer-lock allow-orientation-lock allow-presentation"
-			></iframe>
+			<iframe this={use(this.frameel)}></iframe>
 		</div>
 	);
 };
