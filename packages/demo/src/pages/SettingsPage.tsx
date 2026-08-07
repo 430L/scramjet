@@ -1,5 +1,5 @@
 import { css, type Component } from "dreamland/core";
-import { controller, getTransport } from "..";
+import { getTransport, whenControllerReady } from "..";
 import {
 	AVAILABLE_TRANSPORTS,
 	type AvailableTransports,
@@ -60,7 +60,12 @@ const SettingsView: Component<
 			this.maxRequestsInput = String(nextMaxRequests);
 
 			if (wispChanged || transportChanged) {
-				controller.setTransport(getTransport());
+				// Fire-and-forget: the settings are already persisted above, so
+				// the save must not be reported as failed just because the
+				// controller is still coming up on a slow cold start.
+				void whenControllerReady().then((controller) =>
+					controller.setTransport(getTransport())
+				);
 			}
 			this.status =
 				wispChanged || transportChanged

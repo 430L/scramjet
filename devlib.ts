@@ -6,6 +6,7 @@ const chafa = await Chafa();
 const imageToAnsi = promisify(chafa.imageToAnsi);
 import { rspack, type RspackOptions } from "@rspack/core";
 import type { ViteDevServer } from "vite";
+import { DEFAULT_PREFIX as PROXY_PREFIX } from "./packages/controller/src/prefix";
 
 export function black() {
 	return chalk.bgHex("000001");
@@ -150,7 +151,10 @@ export function warnOnUrlEscape(server: ViteDevServer) {
 		next: (err?: unknown) => void
 	) => {
 		const pathname = (req.url ?? "").split("?")[0] ?? "";
-		if (pathname.startsWith("/~/sj") && !pathname.endsWith(".map")) {
+		// Must track the controller's configured prefix. This was pinned to
+		// "/~/sj", the original pre-rename prefix, so the warning had been
+		// silently dead since the assets were renamed.
+		if (pathname.startsWith(PROXY_PREFIX) && !pathname.endsWith(".map")) {
 			server.config.logger.warn(`url escape: ${req.method} ${req.url}`);
 		}
 		next();

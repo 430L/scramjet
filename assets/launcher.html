@@ -83,15 +83,52 @@
 		defense. Removing either turns any bug in the other into a full
 		escape.
 
-		To customize: change PROXY_URL below.
+		THE LOADING STATE MATTERS. The shell paints the same near-black as
+		the app, so an iframe that never loads is indistinguishable from one
+		that loaded fine — that is what a "black screen where nothing
+		happens" actually is. The shell therefore starts with a visible
+		status overlay and only hides it once the app inside reports that it
+		booted (a postMessage the app sends to its parent). If the app
+		reports failure, or nothing arrives at all before the backstop
+		timeout, the overlay turns into an error with a way out.
+
+		To customize: change PROXY_URL below, or pass ?url=<proxy origin>.
 	-->
 	<div id="launcher">
 		<button id="go" type="button">Launch</button>
 		<p>Opens a new tab whose URL bar stays on <code>about:blank</code>.</p>
 	</div>
 	<script>
-		// Replace with your deployed proxy origin.
-		var PROXY_URL = "https://scramjet-3oyx.onrender.com/";
+		// Default proxy origin. Overridable per-visit with ?url=… so one
+		// copy of this file can point at a staging deploy without an edit.
+		var DEFAULT_PROXY_URL = "https://scramjet-3oyx.onrender.com/";
+
+		// Only http(s) targets. Without this check a ?url=javascript:… would
+		// end up in the iframe's src attribute.
+		function resolveProxyUrl() {
+			try {
+				var requested = new URL(location.href).searchParams.get("url");
+				if (!requested) return DEFAULT_PROXY_URL;
+				var parsed = new URL(requested, location.href);
+				if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+					return DEFAULT_PROXY_URL;
+				}
+				return parsed.href;
+			} catch (e) {
+				return DEFAULT_PROXY_URL;
+			}
+		}
+
+		var PROXY_URL = resolveProxyUrl();
+
+		// How long to wait for the app to report a successful boot before
+		// declaring the launch failed. Deliberately generous: a host that
+		// sleeps when idle can take the better part of a minute to answer,
+		// and the app's own boot budget runs to roughly 85s, so a shorter
+		// timeout here would call failure while the app is still working.
+		var BOOT_TIMEOUT_MS = 90000;
+		// When to admit that this is taking a while.
+		var SLOW_HINT_MS = 10000;
 
 		// The sandbox tokens listed here are load-bearing. Do NOT add
 		// allow-top-navigation, allow-top-navigation-by-user-activation,
@@ -109,6 +146,122 @@
 			"allow-orientation-lock",
 			"allow-presentation"
 		].join(" ");
+
+		function escapeAttr(s) {
+			return String(s)
+				.replace(/&/g, "&amp;")
+				.replace(/"/g, "&quot;")
+				.replace(/</g, "&lt;")
+				.replace(/>/g, "&gt;");
+		}
+
+		function shellStyles() {
+			return "html,body{margin:0;padding:0;height:100%;background:#0f0f0f;" +
+				"color:#e5e7eb;font-family:system-ui,-apple-system,sans-serif;overflow:hidden}" +
+				"iframe{margin:0;padding:0;border:0;width:100%;height:100%;display:block;background:#0f0f0f}" +
+				"#ov{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;" +
+				"background:#0f0f0f;transition:opacity .25s ease}" +
+				"#ov.hidden{opacity:0;pointer-events:none}" +
+				"#box{display:flex;flex-direction:column;align-items:center;gap:.85em;padding:2em;" +
+				"text-align:center;max-width:32em}" +
+				"#msg{margin:0;font-size:1em;color:#e5e7eb}" +
+				"#hint{margin:0;font-size:.85em;color:#8f8f8f;overflow-wrap:anywhere}" +
+				"#acts{display:flex;gap:.6em;flex-wrap:wrap;justify-content:center}" +
+				"#acts button{background:#1a1a1a;border:1px solid #2a2a2a;color:#e5e7eb;" +
+				"padding:.6em 1.2em;border-radius:6px;font-size:.9em;font-family:inherit;cursor:pointer}" +
+				"#acts button:hover{background:#222}" +
+				"#sp{width:1.6em;height:1.6em;border:2px solid #2a2a2a;border-top-color:#8f8f8f;" +
+				"border-radius:50%;animation:spin .9s linear infinite}" +
+				"#sp.done{display:none}" +
+				"@keyframes spin{to{transform:rotate(360deg)}}" +
+				"@media (prefers-reduced-motion:reduce){#sp{animation:none}}";
+		}
+
+		// Runs inside the launched tab. Kept as a function so it can be
+		// stringified into the shell rather than maintained as a string.
+		function shellBootstrap(proxyUrl, bootTimeoutMs, slowHintMs) {
+			var frame = document.getElementById("f");
+			var overlay = document.getElementById("ov");
+			var msg = document.getElementById("msg");
+			var hint = document.getElementById("hint");
+			var acts = document.getElementById("acts");
+			var spinner = document.getElementById("sp");
+			var settled = false;
+			var timers = [];
+
+			function clearTimers() {
+				for (var i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+				timers = [];
+			}
+
+			function succeed() {
+				if (settled) return;
+				settled = true;
+				clearTimers();
+				overlay.className = "hidden";
+			}
+
+			function fail(text) {
+				if (settled) return;
+				settled = true;
+				clearTimers();
+				spinner.className = "done";
+				msg.textContent = "Couldn't load";
+				hint.textContent = text;
+
+				var retry = document.createElement("button");
+				retry.type = "button";
+				retry.textContent = "Try again";
+				retry.onclick = function () {
+					// Full reload of the shell, not just the iframe: a failed
+					// boot can leave a half-registered service worker behind,
+					// and re-pointing src alone would inherit it.
+					location.reload();
+				};
+
+				var direct = document.createElement("button");
+				direct.type = "button";
+				direct.textContent = "Open directly";
+				direct.onclick = function () {
+					// Escape hatch only. This exposes the proxy origin in the
+					// URL bar, which is exactly what the trampoline exists to
+					// avoid — so it is a button the user must choose, never
+					// something that happens automatically.
+					window.open(proxyUrl, "_blank", "noopener");
+				};
+
+				acts.appendChild(retry);
+				acts.appendChild(direct);
+			}
+
+			// The app posts this once its service worker and proxy runtime are
+			// up. It is the only reliable success signal available: the iframe
+			// is cross-origin so its contents cannot be inspected, and its
+			// `load` event fires for browser error pages too.
+			window.addEventListener("message", function (e) {
+				if (e.source !== frame.contentWindow) return;
+				var data = e.data;
+				if (!data || typeof data !== "object") return;
+				if (data.__akBoot === "ready") succeed();
+				else if (data.__akBoot === "error") {
+					fail(data.message || "The proxy failed to start.");
+				}
+			});
+
+			timers.push(setTimeout(function () {
+				if (settled) return;
+				hint.textContent =
+					"Still connecting. The server may be waking up from sleep, " +
+					"which can take up to a minute.";
+			}, slowHintMs));
+
+			timers.push(setTimeout(function () {
+				fail(
+					"No response from " + proxyUrl + " after " +
+					Math.round(bootTimeoutMs / 1000) + " seconds."
+				);
+			}, bootTimeoutMs));
+		}
 
 		function launch() {
 			// Must be inside the click handler for the popup-blocker
@@ -128,13 +281,27 @@
 			// breaking out of the sandbox attribute. Same for the URL
 			// itself — anchoring the sandbox and src as attributes is
 			// safe as long as they can't be quote-escaped.
+			var bootstrap =
+				"(" + shellBootstrap.toString() + ")(" +
+				JSON.stringify(PROXY_URL) + "," +
+				BOOT_TIMEOUT_MS + "," + SLOW_HINT_MS + ");";
+
 			var html =
 				"<!DOCTYPE html>" +
 				"<html><head><meta charset=\"utf-8\"><title>Loading...</title>" +
-				"<style>html,body,iframe{margin:0;padding:0;border:0;width:100%;height:100%;background:#0f0f0f}html,body{height:100vh;overflow:hidden}</style>" +
+				"<style>" + shellStyles() + "</style>" +
 				"</head><body>" +
-				"<iframe sandbox=\"" + escapeAttr(SANDBOX) + "\" src=\"" +
+				"<iframe id=\"f\" sandbox=\"" + escapeAttr(SANDBOX) + "\" src=\"" +
 				escapeAttr(PROXY_URL) + "\" allow=\"clipboard-read; clipboard-write\"></iframe>" +
+				"<div id=\"ov\"><div id=\"box\">" +
+				"<div id=\"sp\"></div>" +
+				"<p id=\"msg\">Connecting…</p>" +
+				"<p id=\"hint\"></p>" +
+				"<div id=\"acts\"></div>" +
+				"</div></div>" +
+				// The closing tag is split so this string can't terminate the
+				// <script> block that contains it.
+				"<scr" + "ipt>" + bootstrap + "</scr" + "ipt>" +
 				"</body></html>";
 
 			try {
@@ -147,14 +314,6 @@
 				// browser change breaks this, fall through and tell the user.
 				alert("Failed to initialise the launcher tab: " + e);
 			}
-		}
-
-		function escapeAttr(s) {
-			return String(s)
-				.replace(/&/g, "&amp;")
-				.replace(/"/g, "&quot;")
-				.replace(/</g, "&lt;")
-				.replace(/>/g, "&gt;");
 		}
 
 		document.getElementById("go").addEventListener("click", launch);

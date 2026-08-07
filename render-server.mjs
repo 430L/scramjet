@@ -2,12 +2,12 @@
 //
 // It does two jobs on one origin:
 //   1. Serves the pre-built static demo (packages/demo/dist).
-//   2. Terminates Wisp WebSocket connections at /wisp/, which is the
+//   2. Terminates Wisp WebSocket connections at WISP_PATH, which is the
 //      transport the proxy actually uses to reach the wider internet.
 //
 // Because the demo and the Wisp endpoint share an origin, the browser talks
-// to wss://<host>/wisp/ with no CORS and no cross-origin config. The build
-// step bakes that same-origin URL into the demo via VITE_WISP_URL.
+// to wss://<host><WISP_PATH> with no CORS and no cross-origin config. The
+// build step bakes that same-origin URL into the demo via VITE_WISP_URL.
 
 import fs from "node:fs";
 import http from "node:http";
@@ -25,11 +25,21 @@ const PORT = Number(process.env.PORT) || 8080;
 const WISP_PATH = process.env.WISP_PATH || "/api/socket/";
 const STATIC_DIR = path.join(__dirname, "packages", "demo", "dist");
 
+// Path prefix under which the service worker serves proxied requests. Must
+// match DEFAULT_PREFIX in packages/controller/src/prefix.ts.
+const PROXY_PREFIX = "/static/render/";
+
 // Boot-time sanity check. When the vite copy step misplaces a file, the
 // SPA fallback would silently return index.html for it — the browser then
 // parses HTML as JS/WASM and the demo boots to a black screen with no
-// visible error. Log a clear warning so the failure mode is discoverable
-// in Render's deploy logs. Kept non-fatal so /healthz still works.
+// visible error.
+//
+// This exits non-zero rather than warning. A deploy that is missing the
+// rewriter wasm or the service worker runtime cannot serve a single proxied
+// request; coming up anyway just swaps a failed deploy (visible in Render's
+// dashboard, and which leaves the previous good version running) for a live
+// site that is broken for every visitor. Every missing file is reported
+// before exiting so one deploy log shows the whole story.
 const REQUIRED_ASSETS = [
 	"index.html",
 	"static/chunks/main.js",
@@ -37,12 +47,20 @@ const REQUIRED_ASSETS = [
 	"static/chunks/runtime.api.js",
 	"static/chunks/runtime.inject.js",
 	"static/chunks/runtime.sw.js",
+	"sw.js",
 ];
-for (const rel of REQUIRED_ASSETS) {
-	const abs = path.join(STATIC_DIR, rel);
-	if (!fs.existsSync(abs)) {
-		console.error(`Missing required asset: ${abs}`);
+const missingAssets = REQUIRED_ASSETS.filter(
+	(rel) => !fs.existsSync(path.join(STATIC_DIR, rel))
+);
+if (missingAssets.length > 0) {
+	for (const rel of missingAssets) {
+		console.error(`Missing required asset: ${path.join(STATIC_DIR, rel)}`);
 	}
+	console.error(
+		`${missingAssets.length} required asset(s) missing from ${STATIC_DIR}. ` +
+			`Refusing to start — check the build step.`
+	);
+	process.exit(1);
 }
 
 const app = express();
@@ -105,6 +123,23 @@ app.get("/healthz", (_req, res) => {
 const ASSET_EXTENSIONS =
 	/\.(?:js|mjs|wasm|css|map|json|png|svg|ico|jpg|jpeg|gif|webp|woff2?|ttf|otf|eot)$/i;
 app.get(/.*/, (req, res) => {
+	// Proxied URLs are supposed to be answered by the service worker in the
+	// browser and never reach this server. When one does, the service worker
+	// is missing, evicted, or failed to install — and returning the SPA shell
+	// is the worst possible answer: the browser gets HTTP 200 text/html and
+	// renders a second copy of the app nested inside the frame that asked for
+	// a website. Fail visibly instead.
+	if (req.path.startsWith(PROXY_PREFIX)) {
+		res
+			.status(503)
+			.type("text/plain")
+			.send(
+				"This URL is served by the in-browser proxy runtime, which is not " +
+					"currently active. Reload the page to reconnect it."
+			);
+		return;
+	}
+
 	if (ASSET_EXTENSIONS.test(req.path)) {
 		res.status(404).type("text/plain").send("Not Found");
 		return;
@@ -114,7 +149,7 @@ app.get(/.*/, (req, res) => {
 
 const server = http.createServer(app);
 
-// Route only /wisp/ upgrades into the Wisp server; reject other upgrades.
+// Route only WISP_PATH upgrades into the Wisp server; reject other upgrades.
 // Note: we intentionally leave allow_private_ips / allow_loopback_ips at
 // their safe defaults (disabled) so the proxy can't be used to reach the
 // host's internal network.

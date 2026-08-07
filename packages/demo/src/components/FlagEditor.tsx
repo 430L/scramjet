@@ -1,11 +1,37 @@
 import { createStore, css, type Component } from "dreamland/core";
 import type { AkFlags } from "@mercuryworkshop/scramjet";
-import { defaultConfigDev } from "@mercuryworkshop/scramjet";
-import { cachePlugin, controller } from "..";
+import { defaultConfig } from "@mercuryworkshop/scramjet";
+import { cachePlugin, whenControllerReady } from "..";
 
+// Flags the controller owns. These are not user preferences: the editor must
+// neither display them nor let a stale localStorage entry override them.
+//
+// The mechanism matters. applyFlags() below does
+// `Object.assign(controller.runtimeConfig.flags, flagStore)`, which means the
+// persisted store is the last writer and silently wins over anything the
+// controller configured at construction. Forcing these values into the store
+// is what keeps that assignment from undoing them.
+//
+//   confineNavigation      load-bearing for embedded/trampoline setups —
+//                          turning it off lets proxied content escape the
+//                          outer tab and reveal the raw proxy origin.
+//   allowFailedIntercepts  when off, an error raised inside an API interceptor
+//                          is rethrown into the proxied page and can take the
+//                          whole site down. The controller turns it on
+//                          deliberately; the editor used to turn it back off
+//                          on every boot.
+const CONTROLLER_MANAGED_FLAGS = {
+	confineNavigation: true,
+	allowFailedIntercepts: true,
+} satisfies Partial<AkFlags>;
+
+// Seeded from the production defaults, matching the runtimeConfig the
+// controller is actually constructed with. Seeding from the dev preset meant
+// the editor's checkboxes disagreed with the live flags on first paint.
 const flagStore = createStore<AkFlags>(
 	{
-		...defaultConfigDev.flags,
+		...defaultConfig.flags,
+		...CONTROLLER_MANAGED_FLAGS,
 	},
 	{
 		ident: "ak-flags",
@@ -14,11 +40,9 @@ const flagStore = createStore<AkFlags>(
 	}
 );
 
-// confineNavigation is load-bearing for embedded/trampoline setups: turning it
-// off lets proxied content escape the outer tab and reveal the raw proxy URL.
-// Strip any persisted override at load time and force it back to true so a
-// stale localStorage entry can't disable it.
-flagStore.confineNavigation = true;
+// Strip any persisted overrides at load time. createStore rehydrates from
+// localStorage over the seed above, so this has to run after construction.
+Object.assign(flagStore, CONTROLLER_MANAGED_FLAGS);
 
 // Flag descriptions for better UX. confineNavigation is intentionally absent so
 // it doesn't render as a user-toggleable checkbox in the editor.
@@ -58,20 +82,28 @@ const FlagEditor: Component<
 	this.isOpen = false;
 	this.cacheBustStatus = "";
 
+	// Push the current flag store onto the live runtime config. Awaits the
+	// controller rather than assuming it exists: these run from click handlers,
+	// which normally means boot is long done, but a click landing during a slow
+	// cold start would otherwise throw on an undefined controller.
+	const applyFlags = async () => {
+		const controller = await whenControllerReady();
+		Object.assign(flagStore, CONTROLLER_MANAGED_FLAGS);
+		Object.assign(controller.runtimeConfig.flags, flagStore);
+		Object.assign(controller.runtimeConfig.flags, CONTROLLER_MANAGED_FLAGS);
+	};
+
 	const toggleFlag = (flag: keyof AkFlags, value: boolean) => {
 		flagStore[flag] = value;
-		flagStore.confineNavigation = true;
-		Object.assign(controller.runtimeConfig.flags, flagStore);
-		controller.runtimeConfig.flags.confineNavigation = true;
+		void applyFlags();
 	};
 
 	const resetToDefaults = () => {
 		Object.assign(flagStore, {
-			...defaultConfigDev.flags,
+			...defaultConfig.flags,
+			...CONTROLLER_MANAGED_FLAGS,
 		});
-		flagStore.confineNavigation = true;
-		Object.assign(controller.runtimeConfig.flags, flagStore);
-		controller.runtimeConfig.flags.confineNavigation = true;
+		void applyFlags();
 	};
 
 	const bustCache = async () => {
@@ -87,11 +119,8 @@ const FlagEditor: Component<
 			this.cacheBustStatus = "";
 		}, 2000);
 	};
-	cx.mount = async () => {
-		await controller.wait();
-		flagStore.confineNavigation = true;
-		Object.assign(controller.runtimeConfig.flags, flagStore);
-		controller.runtimeConfig.flags.confineNavigation = true;
+	cx.mount = () => {
+		void applyFlags();
 	};
 
 	return (
@@ -126,7 +155,7 @@ const FlagEditor: Component<
 					)}
 					<div class="flags-list">
 						{(Object.keys(flagStore) as Array<keyof AkFlags>)
-							.filter((flag) => flag !== "confineNavigation")
+							.filter((flag) => !(flag in CONTROLLER_MANAGED_FLAGS))
 							.map((flag) => (
 								<label class="flag-item">
 									<input

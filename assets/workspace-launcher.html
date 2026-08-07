@@ -1,0 +1,346 @@
+<!doctype html>
+<html lang="en">
+	<head>
+		<meta charset="utf-8" />
+		<meta name="viewport" content="width=device-width, initial-scale=1" />
+		<title>Workspace</title>
+		<!--
+			Styled trampoline launcher.
+
+			Same guarantee as assets/launcher.html: the launched tab's URL bar
+			stays on about:blank, enforced by the sandbox token list on the
+			injected iframe (no allow-top-navigation*, no allow-popups*).
+
+			Fixed relative to the earlier revision of this file:
+
+			  * The iframe's `load` event was treated as success. It is not —
+			    it also fires for the browser's own error pages, so a refused
+			    connection or a 5xx hid the spinner and left a black screen
+			    that looked like a working, empty app. Success is now signalled
+			    by the app itself via postMessage.
+			  * There was no timeout and no error state. A host that never
+			    answered spun forever with no way out.
+			  * The target URL appeared twice (once in the fallback link, once
+			    in script) and could drift. There is now one constant.
+
+			Note on wording: the visible copy deliberately avoids the phrase
+			"web proxy". Category filters key on exactly that string, and the
+			rest of this project goes to some trouble to remove it.
+		-->
+		<style>
+			html,
+			body {
+				margin: 0;
+				min-height: 100%;
+				background: #0f0f0f;
+				font-family: system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+				color: #cbd5e1;
+			}
+
+			body {
+				display: grid;
+				min-height: 100vh;
+				place-items: center;
+				padding: 24px;
+				box-sizing: border-box;
+			}
+
+			.box {
+				width: min(460px, 100%);
+				line-height: 1.6;
+				font-size: 15px;
+				text-align: center;
+			}
+
+			.spinner {
+				width: 26px;
+				height: 26px;
+				border: 3px solid #2a2f3a;
+				border-top-color: #60a5fa;
+				border-radius: 50%;
+				margin: 0 auto 16px;
+				animation: spin 0.9s linear infinite;
+			}
+
+			button,
+			.direct-link {
+				display: inline-block;
+				margin-top: 18px;
+				border: 1px solid #3b82f6;
+				border-radius: 8px;
+				padding: 10px 16px;
+				background: #2563eb;
+				color: #fff;
+				font: inherit;
+				font-size: 14px;
+				text-decoration: none;
+				cursor: pointer;
+			}
+
+			button:hover,
+			.direct-link:hover {
+				background: #3b82f6;
+			}
+
+			.muted {
+				margin-top: 12px;
+				color: #7c8798;
+				font-size: 13px;
+			}
+
+			#status {
+				min-height: 1.6em;
+				margin-top: 14px;
+				color: #93c5fd;
+				font-size: 13px;
+			}
+
+			@keyframes spin {
+				to {
+					transform: rotate(360deg);
+				}
+			}
+
+			@media (prefers-reduced-motion: reduce) {
+				.spinner {
+					animation: none;
+				}
+			}
+		</style>
+	</head>
+	<body>
+		<main class="box">
+			<div class="spinner" aria-hidden="true"></div>
+			<div>Workspace</div>
+			<div class="muted">
+				Made By 430L -
+				<code>https://github.com/430L</code>
+			</div>
+
+			<button id="open-workspace" type="button">Launch</button>
+			<div id="status" role="status" aria-live="polite"></div>
+
+			<a id="direct" class="direct-link" target="_blank" rel="noopener noreferrer"
+				>Open directly</a
+			>
+		</main>
+
+		<script>
+			(function () {
+				// Single source of truth for the target. Overridable per-visit
+				// with ?url=… so one copy can point at a staging deploy.
+				var DEFAULT_TARGET_URL = "https://scramjet-3oyx.onrender.com/";
+
+				// Wait this long for the app to report a successful boot.
+				// Generous on purpose: a host that sleeps when idle can take
+				// most of a minute to answer its first request, and the app's
+				// own boot budget runs to roughly 85s. A shorter timeout here
+				// would declare failure while the app is still working.
+				var BOOT_TIMEOUT_MS = 90000;
+				var SLOW_HINT_MS = 10000;
+
+				// Unchanged from the previous revision — these lists are what
+				// keep proxied content from taking over the outer tab.
+				var SANDBOX =
+					"allow-scripts allow-same-origin allow-forms allow-modals " +
+					"allow-downloads allow-storage-access-by-user-activation " +
+					"allow-pointer-lock allow-orientation-lock allow-presentation";
+				var ALLOW =
+					"fullscreen; clipboard-read; clipboard-write; autoplay; " +
+					"encrypted-media; picture-in-picture";
+
+				// Reject anything that isn't http(s) so a crafted ?url= can't
+				// put a javascript: URL into the iframe's src.
+				function resolveTargetUrl() {
+					try {
+						var requested = new URL(location.href).searchParams.get("url");
+						if (!requested) return DEFAULT_TARGET_URL;
+						var parsed = new URL(requested, location.href);
+						if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+							return DEFAULT_TARGET_URL;
+						}
+						return parsed.href;
+					} catch (e) {
+						return DEFAULT_TARGET_URL;
+					}
+				}
+
+				var targetUrl = resolveTargetUrl();
+				var launchButton = document.getElementById("open-workspace");
+				var status = document.getElementById("status");
+				document.getElementById("direct").href = targetUrl;
+
+				function escapeAttr(s) {
+					return String(s)
+						.replace(/&/g, "&amp;")
+						.replace(/"/g, "&quot;")
+						.replace(/</g, "&lt;")
+						.replace(/>/g, "&gt;");
+				}
+
+				// Runs inside the launched tab.
+				function shellBootstrap(target, bootTimeoutMs, slowHintMs) {
+					var frame = document.getElementById("frame");
+					var hint = document.getElementById("hint");
+					var spinner = document.getElementById("spinner");
+					var title = document.getElementById("hint-title");
+					var detail = document.getElementById("hint-detail");
+					var actions = document.getElementById("hint-actions");
+					var settled = false;
+					var timers = [];
+
+					function clearTimers() {
+						for (var i = 0; i < timers.length; i++) clearTimeout(timers[i]);
+						timers = [];
+					}
+
+					function succeed() {
+						if (settled) return;
+						settled = true;
+						clearTimers();
+						hint.style.opacity = "0";
+						setTimeout(function () {
+							hint.style.display = "none";
+						}, 400);
+					}
+
+					function fail(message) {
+						if (settled) return;
+						settled = true;
+						clearTimers();
+						spinner.style.display = "none";
+						title.textContent = "Couldn't load";
+						detail.textContent = message;
+
+						var retry = document.createElement("button");
+						retry.type = "button";
+						retry.textContent = "Try again";
+						retry.onclick = function () {
+							// Reload the whole shell rather than just resetting
+							// the iframe src: a failed boot can leave a
+							// half-registered service worker behind.
+							location.reload();
+						};
+
+						var direct = document.createElement("button");
+						direct.type = "button";
+						direct.textContent = "Open directly";
+						direct.onclick = function () {
+							// Escape hatch only — this puts the real origin in
+							// the URL bar, which is what the trampoline exists
+							// to avoid. Never automatic.
+							window.open(target, "_blank", "noopener");
+						};
+
+						actions.appendChild(retry);
+						actions.appendChild(direct);
+					}
+
+					// The only trustworthy success signal. The iframe is
+					// cross-origin so its content can't be inspected, and its
+					// `load` event fires for browser error pages too — which is
+					// exactly how a dead host used to look like a live one.
+					window.addEventListener("message", function (e) {
+						if (e.source !== frame.contentWindow) return;
+						var data = e.data;
+						if (!data || typeof data !== "object") return;
+						if (data.__akBoot === "ready") succeed();
+						else if (data.__akBoot === "error")
+							fail(data.message || "The workspace failed to start.");
+					});
+
+					timers.push(
+						setTimeout(function () {
+							if (settled) return;
+							detail.textContent =
+								"Still connecting. The server may be waking up from sleep, " +
+								"which can take up to a minute.";
+						}, slowHintMs)
+					);
+
+					timers.push(
+						setTimeout(function () {
+							fail(
+								"No response from " +
+									target +
+									" after " +
+									Math.round(bootTimeoutMs / 1000) +
+									" seconds. It may be blocked at the network level, or " +
+									"may disallow framing."
+							);
+						}, bootTimeoutMs)
+					);
+				}
+
+				launchButton.addEventListener("click", function () {
+					var frameWindow = window.open("about:blank", "_blank");
+
+					if (!frameWindow) {
+						status.textContent = "Allow popups for this page and try again.";
+						return;
+					}
+
+					var bootstrap =
+						"(" +
+						shellBootstrap.toString() +
+						")(" +
+						JSON.stringify(targetUrl) +
+						"," +
+						BOOT_TIMEOUT_MS +
+						"," +
+						SLOW_HINT_MS +
+						");";
+
+					frameWindow.document.open();
+					frameWindow.document.write(
+						"<!doctype html>" +
+							'<html lang="en"><head><meta charset="utf-8">' +
+							'<meta name="viewport" content="width=device-width, initial-scale=1">' +
+							"<title>Workspace</title>" +
+							"<style>" +
+							"html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0f0f0f}" +
+							"#frame{position:fixed;inset:0;width:100%;height:100%;border:0}" +
+							"#hint{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;" +
+							'text-align:center;font-family:system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;' +
+							"color:#cbd5e1;padding:24px;background:#0f0f0f;transition:opacity .4s}" +
+							"#hint .box{max-width:460px;line-height:1.6;font-size:15px}" +
+							"#hint-detail{color:#7c8798;font-size:13px;margin-top:10px;overflow-wrap:anywhere}" +
+							"#hint-actions{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;margin-top:18px}" +
+							"#hint-actions button{border:1px solid #3b82f6;border-radius:8px;padding:10px 16px;" +
+							"background:#2563eb;color:#fff;font:inherit;font-size:14px;cursor:pointer}" +
+							"#hint-actions button:hover{background:#3b82f6}" +
+							"#spinner{width:26px;height:26px;border:3px solid #2a2f3a;" +
+							"border-top-color:#60a5fa;border-radius:50%;margin:0 auto 16px;" +
+							"animation:spin .9s linear infinite}" +
+							"@keyframes spin{to{transform:rotate(360deg)}}" +
+							"@media (prefers-reduced-motion:reduce){#spinner{animation:none}}" +
+							"</style></head><body>" +
+							'<iframe id="frame" src="' +
+							escapeAttr(targetUrl) +
+							'" sandbox="' +
+							escapeAttr(SANDBOX) +
+							'" allow="' +
+							escapeAttr(ALLOW) +
+							'" allowfullscreen referrerpolicy="no-referrer"></iframe>' +
+							'<div id="hint"><div class="box"><div id="spinner"></div>' +
+							'<div id="hint-title">Loading…</div>' +
+							'<div id="hint-detail"></div>' +
+							'<div id="hint-actions"></div>' +
+							"</div></div>" +
+							// Split so this string can't terminate the enclosing
+							// <script> block.
+							"<scr" +
+							"ipt>" +
+							bootstrap +
+							"</scr" +
+							"ipt>" +
+							"</body></html>"
+					);
+					frameWindow.document.close();
+
+					status.textContent = "Workspace opened in a new tab.";
+				});
+			})();
+		</script>
+	</body>
+</html>

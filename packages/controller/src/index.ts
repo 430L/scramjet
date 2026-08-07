@@ -21,6 +21,7 @@ import {
 	Plugin,
 } from "@mercuryworkshop/scramjet";
 import { CONTROLLERFRAME } from "./symbols";
+import { DEFAULT_PREFIX } from "./prefix";
 import type {
 	FrameInitHooks,
 	SerializedCookieSyncEntry,
@@ -46,7 +47,9 @@ export type Config = {
 };
 
 export const config: Config = {
-	prefix: "/static/render/",
+	// Shared with the service worker bundle, which needs the static root to
+	// decide whether to route a request after being evicted and restarted.
+	prefix: DEFAULT_PREFIX,
 	corePath: "/static/chunks/main.js",
 	injectPath: "/static/chunks/runtime.inject.js",
 	wasmPath: "/static/chunks/main.wasm",
@@ -82,11 +85,22 @@ export const config: Config = {
 	},
 };
 
+/** Upper bound on fetching the rewriter wasm binary. */
+const WASM_FETCH_TIMEOUT_MS = 30_000;
+
+// Controller-level overrides layered on top of whatever runtime config the
+// embedder passes in.
+//
+// This MUST stay a sparse delta rather than a full config. It is merged last,
+// so any key present here wins outright — spreading the full default flag set
+// in would silently stomp every flag the embedder chose.
 const runtimeConfig: Partial<AkConfig> = {
 	flags: {
-		...scramjetDefaultConfig.flags,
+		// A failed intercept inside proxied content should not throw out of the
+		// trampoline and take down the page; the controller can serve the
+		// request through the normal path instead.
 		allowFailedIntercepts: true,
-	},
+	} as AkConfig["flags"],
 	maskedfiles: ["inject.js", "chunk.wasm.js"],
 };
 
@@ -270,13 +284,49 @@ export class Controller {
 		void this.loadSavedCookies();
 	};
 
+	/**
+	 * Fetch the rewriter wasm binary, failing loudly and early.
+	 *
+	 * Without the `ok` check a 404 or an SPA fallback's index.html is handed
+	 * straight to `setWasm()`, and the only symptom is a wasm magic-number
+	 * error thrown much later from deep inside the rewriter, with nothing
+	 * naming the path that was actually served. Without the timeout, a host
+	 * that accepts the connection and then stalls leaves `controller.wait()`
+	 * pending forever.
+	 */
+	private async fetchWasmBuffer(): Promise<ArrayBuffer> {
+		const path = this.config.wasmPath;
+		let resp: Response;
+		try {
+			resp = await fetch(path, {
+				signal: AbortSignal.timeout(WASM_FETCH_TIMEOUT_MS),
+			});
+		} catch (e) {
+			if (e instanceof Error && e.name === "TimeoutError") {
+				throw new Error(
+					`Timed out after ${WASM_FETCH_TIMEOUT_MS / 1000}s fetching rewriter wasm from ${path}`
+				);
+			}
+			throw new Error(
+				`Could not fetch rewriter wasm from ${path}: ${e instanceof Error ? e.message : String(e)}`
+			);
+		}
+
+		if (!resp.ok) {
+			throw new Error(
+				`Could not fetch rewriter wasm from ${path}: HTTP ${resp.status} ${resp.statusText}`
+			);
+		}
+
+		return resp.arrayBuffer();
+	}
+
 	private async loadAkWasm() {
 		if (this.wasmAlreadyFetched) {
 			return;
 		}
 
-		const resp = await fetch(this.config.wasmPath);
-		setWasm(await resp.arrayBuffer());
+		setWasm(await this.fetchWasmBuffer());
 		this.wasmAlreadyFetched = true;
 	}
 
@@ -297,8 +347,7 @@ export class Controller {
 
 				if (path === frame.prefix + this.config.virtualWasmPath) {
 					if (!this.wasmPayload) {
-						const resp = await fetch(this.config.wasmPath);
-						const buf = await resp.arrayBuffer();
+						const buf = await this.fetchWasmBuffer();
 						const b64 = btoa(
 							new Uint8Array(buf)
 								.reduce(
@@ -469,10 +518,20 @@ export class Controller {
 		assertRuntimeAkVersion();
 		this.id = makeId();
 		this.config = deepMerge(config, init.config || {}) as Config;
-		this.runtimeConfig = deepMerge(runtimeConfig, scramjetDefaultConfig);
+		// Merge order is load-bearing: with @fastify/deepmerge the *source*
+		// (second argument) wins. Layer defaults, then the embedder's config,
+		// then the controller's own requirements last so they actually apply.
+		//
+		// This used to read deepMerge(runtimeConfig, scramjetDefaultConfig),
+		// which put the defaults last and made every controller override a
+		// no-op — allowFailedIntercepts was reset to false on every boot.
+		this.runtimeConfig = deepMerge(
+			scramjetDefaultConfig,
+			init.runtimeConfig || {}
+		) as AkConfig;
 		this.runtimeConfig = deepMerge(
 			this.runtimeConfig,
-			init.runtimeConfig || {}
+			runtimeConfig
 		) as AkConfig;
 		this.prefix = this.config.prefix + this.id + "/";
 		this.serviceWorkerController = init.serviceworker;
