@@ -167,7 +167,11 @@ export default function (client: AkClient, self: GlobalThis) {
 			}
 		} else if (t === "string") {
 			if (v.includes("$ak")) debugger;
-			if (v.includes("/a/")) debugger;
+			// The live prefix, not a literal. This was hardcoded to "/a/" — a
+			// prefix two renames out of date, which meant it never fired on a
+			// real proxied URL and did fire on any string containing "/a/",
+			// "/api/" being the obvious one.
+			if (v.includes(client.context.prefix.pathname)) debugger;
 			if (v.includes(location.origin)) debugger;
 		}
 

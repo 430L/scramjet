@@ -3,6 +3,16 @@
 import { RpcHelper } from "@mercuryworkshop/rpc";
 import type { Controllerbound, SWbound } from "./types";
 import type { RawHeaders } from "@mercuryworkshop/proxy-transports";
+import { DEFAULT_PREFIX } from "./prefix";
+
+/**
+ * How long `route()` will wait for a controller to re-announce itself after
+ * the browser evicted this worker. The round trip is a postMessage out to
+ * every client and a MessagePort back, so this only needs to cover a single
+ * event-loop hop on a busy page — but a page mid-navigation can be slow to
+ * respond, hence seconds rather than milliseconds.
+ */
+const REVIVE_TIMEOUT_MS = 5000;
 
 function makeId(): string {
 	return Math.random().toString(36).substring(2, 10);
@@ -143,6 +153,9 @@ class ControllerReference {
 
 const tabs: ControllerReference[] = [];
 
+/** Woken when a controller registers, so in-flight requests can retry. */
+const tabWaiters = new Set<() => void>();
+
 addEventListener("message", (e) => {
 	if (!e.data) return;
 	if (typeof e.data != "object") return;
@@ -155,18 +168,83 @@ addEventListener("message", (e) => {
 		tabs.splice(existing, 1);
 	}
 	tabs.push(new ControllerReference(init.prefix, init.id, e.ports[0]));
+
+	for (const wake of [...tabWaiters]) wake();
 });
+
+function findTab(pathname: string): ControllerReference | undefined {
+	return tabs.find((tab) => pathname.startsWith(tab.prefix));
+}
+
+/** Ask every client to hand us a fresh MessagePort. */
+async function requestRevive(): Promise<void> {
+	for (const client of await clients.matchAll()) {
+		client.postMessage({ $controller$swrevive: {} });
+	}
+}
+
+/**
+ * Resolve the controller for a proxied path, reviving the connection first if
+ * this worker was restarted and lost its in-memory registry.
+ */
+async function resolveTab(
+	pathname: string
+): Promise<ControllerReference | undefined> {
+	const existing = findTab(pathname);
+	if (existing) return existing;
+
+	void requestRevive();
+
+	return new Promise<ControllerReference | undefined>((resolve) => {
+		let timer: ReturnType<typeof setTimeout>;
+		const wake = () => {
+			const tab = findTab(pathname);
+			if (!tab) return;
+			clearTimeout(timer);
+			tabWaiters.delete(wake);
+			resolve(tab);
+		};
+		timer = setTimeout(() => {
+			tabWaiters.delete(wake);
+			resolve(findTab(pathname));
+		}, REVIVE_TIMEOUT_MS);
+		tabWaiters.add(wake);
+	});
+}
 
 export function shouldRoute(event: FetchEvent): boolean {
 	const url = new URL(event.request.url);
-	const tab = tabs.find((tab) => url.pathname.startsWith(tab.prefix));
-	return tab !== undefined;
+	if (url.origin !== location.origin) return false;
+
+	// Match on the path, not on the tab registry. The registry lives only in
+	// this worker's memory and is empty after the browser evicts an idle
+	// worker (~30s). Declining to route then would send proxied requests to
+	// the network, where the server's SPA fallback answers with index.html and
+	// the app ends up nested inside its own frame. route() revives the
+	// controller connection instead.
+	if (url.pathname.startsWith(DEFAULT_PREFIX)) return true;
+
+	// An embedder may configure a non-default prefix; those are only known
+	// from a live registration.
+	return findTab(url.pathname) !== undefined;
 }
 
 export async function route(event: FetchEvent): Promise<Response> {
 	try {
 		const url = new URL(event.request.url);
-		const tab = tabs.find((tab) => url.pathname.startsWith(tab.prefix))!;
+		const tab = await resolveTab(url.pathname);
+		if (!tab) {
+			// Deliberately an error rather than a passthrough to the network:
+			// the network cannot answer a proxied URL, and letting it try
+			// yields the SPA shell under a misleading 200.
+			return new Response(
+				"Proxy runtime is not connected to this page. Reload to reconnect.",
+				{
+					status: 503,
+					headers: { "Content-Type": "text/plain" },
+				}
+			);
+		}
 		const client = await clients.get(event.clientId);
 
 		const rawheaders: RawHeaders = [...event.request.headers];

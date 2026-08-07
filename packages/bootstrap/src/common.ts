@@ -60,6 +60,13 @@ export const defaultConfig: Partial<BootstrapOptions> = {
 	// Paths are deliberately named to blend in with a typical bundled SPA
 	// (Next.js/Vite-style /static/chunks) rather than a proxy tuple that
 	// tips off pattern-matching filters.
+	//
+	// Note that these three names differ from the runtime.{api,inject,sw}.js
+	// scheme the demo and render-server use for the same three files. Both
+	// schemes are self-consistent — a bootstrap consumer configures its
+	// server to serve whatever these say — so they are left alone rather than
+	// unified, since changing them would break deployments already serving
+	// the current names. If you add a fourth consumer, pick one of the two.
 	scramjetControllerApiPath: "/static/chunks/framework.js",
 	scramjetControllerInjectPath: "/static/chunks/polyfills.js",
 	scramjetControllerSwPath: "/static/chunks/webpack.js",

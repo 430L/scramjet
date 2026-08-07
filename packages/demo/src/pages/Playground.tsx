@@ -8,7 +8,7 @@ import {
 	AkHeaders,
 	type AkFetchRequest,
 } from "@mercuryworkshop/scramjet";
-import { cachePlugin, controller } from "..";
+import { whenControllerReady } from "..";
 import Monaco from "../components/Monaco";
 
 const DEFAULT_ORIGIN = "https://fakeorigin.com";
@@ -230,7 +230,7 @@ const PlaygroundView: Component<
 	this.rewriteAsModule ??= false;
 
 	cx.mount = async () => {
-		await controller.wait();
+		const controller = await whenControllerReady();
 		this.frame = controller.createFrame();
 
 		use(this.selectedFile, this.selectedProjectId).listen(() => {

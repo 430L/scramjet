@@ -6,7 +6,7 @@ import {
 } from "dreamland/core";
 import { UrlWatcherPlugin } from "@mercuryworkshop/scramjet-utils";
 import { versionInfo } from "@mercuryworkshop/scramjet";
-import { cachePlugin, controller } from "..";
+import { cachePlugin, whenControllerReady } from "..";
 import { demoSettingsStore } from "../store";
 import homepage from "./homepage.html?raw";
 import type { Frame } from "@mercuryworkshop/scramjet-controller";
@@ -146,10 +146,25 @@ const BrowserView: Component<
 	{},
 	{
 		frameel: HTMLIFrameElement;
+		error: string;
 	}
 > = function (cx) {
+	this.error ??= "";
+
 	cx.mount = async () => {
-		await controller.wait();
+		try {
+			await mountFrame();
+		} catch (e) {
+			// Without this the failure is an unhandled rejection and the iframe
+			// simply never gets a src — a black panel under the top bar with no
+			// clue as to why. Surface it in the panel instead.
+			console.error("Failed to initialise the browser view:", e);
+			this.error = e instanceof Error ? e.message : String(e);
+		}
+	};
+
+	const mountFrame = async () => {
+		const controller = await whenControllerReady();
 
 		let urlWatcher = new UrlWatcherPlugin((url) => {
 			browserState.url = url;
@@ -174,20 +189,22 @@ const BrowserView: Component<
 			"{{APP_BUILD}}",
 			String(versionInfo.build)
 		);
+		// Pinned to en-US rather than the visitor's locale. Two reasons: the
+		// build date is a property of the build, not of the reader, so it
+		// should render identically everywhere; and a locale-dependent string
+		// rendered into the page is one more bit a fingerprinter can read back.
 		realHomepage = realHomepage.replaceAll(
 			"{{APP_DATE_PRETTY}}",
-			new Date(versionInfo.date).toLocaleString(undefined, {
+			new Date(versionInfo.date).toLocaleString("en-US", {
 				dateStyle: "short",
 				timeStyle: "short",
 			})
 		);
-		this.frameel.src = `data:text/html;base64,${btoa(realHomepage)}`;
-
-		let goto = new URL(location.href).searchParams.get("goto");
-		if (goto) {
-			browserState.frame?.go(goto);
-			history.replaceState(null, "", location.href.split("?")[0]);
-		}
+		// percent-encoding, not base64. btoa() throws InvalidCharacterError on
+		// any codepoint above U+00FF, so a homepage containing non-Latin-1
+		// text — or a locale-formatted date, which is how this used to break —
+		// would take out the whole panel for those visitors only.
+		this.frameel.src = `data:text/html;charset=utf-8,${encodeURIComponent(realHomepage)}`;
 	};
 
 	return (
@@ -196,7 +213,22 @@ const BrowserView: Component<
 				(active) => `tab-panel browser-view ${active ? "active" : ""}`
 			)}
 		>
+			{/* The iframe is an unconditional child: it must never be swapped
+			    out by a reactive re-render, or a later state change would
+			    silently replace the live frame with a fresh blank one. The
+			    error state is an overlay stacked on top of it instead. */}
 			<iframe this={use(this.frameel)}></iframe>
+			<div
+				class={use(this.error).map(
+					(error) => `panel-error ${error ? "shown" : ""}`
+				)}
+			>
+				<h2>The browser panel failed to start</h2>
+				<p>{use(this.error)}</p>
+				<button type="button" on:click={() => location.reload()}>
+					Reload
+				</button>
+			</div>
 		</div>
 	);
 };
@@ -212,12 +244,57 @@ BrowserView.style = css`
 	}
 	:scope.active {
 		display: flex;
+		/* Anchor for the error overlay. */
+		position: relative;
 	}
 
 	iframe {
 		background: white;
 		flex: 1;
 		border: none;
+	}
+
+	.panel-error {
+		display: none;
+	}
+	.panel-error.shown {
+		position: absolute;
+		inset: 0;
+		display: flex;
+		flex-direction: column;
+		align-items: center;
+		justify-content: center;
+		gap: 0.75em;
+		padding: 2em;
+		text-align: center;
+		background: #0f0f0f;
+		color: #e5e7eb;
+		font-family: system-ui, -apple-system, sans-serif;
+	}
+	.panel-error h2 {
+		margin: 0;
+		font-size: 1.15em;
+		font-weight: 600;
+	}
+	.panel-error p {
+		margin: 0;
+		font-size: 0.9em;
+		color: #b8bcc4;
+		max-width: 34em;
+		overflow-wrap: anywhere;
+	}
+	.panel-error button {
+		background: #1a1a1a;
+		border: 1px solid #2a2a2a;
+		color: #e5e7eb;
+		padding: 0.6em 1.4em;
+		border-radius: 6px;
+		font-size: 0.95em;
+		font-family: inherit;
+		cursor: pointer;
+	}
+	.panel-error button:hover {
+		background: #222;
 	}
 `;
 

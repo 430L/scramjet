@@ -1,4 +1,4 @@
-// SW-VERSION: 2 (asset paths renamed to /static/chunks/*)
+// SW-VERSION: 3 (path-shaped routing survives worker eviction)
 // Bumping this comment when the imported paths change forces the browser
 // to detect a byte-level diff and update returning users' registrations.
 // Without it, a stale worker still calls importScripts("/assets/core.sw.js")
