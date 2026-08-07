@@ -1,4 +1,4 @@
-import { htmlRules } from "@/shared/htmlRules";
+import { filterTarget, htmlRules } from "@/shared/htmlRules";
 import {
 	String,
 	TextEncoder_encode,
@@ -705,6 +705,27 @@ export default function (client: AkClient, self: typeof window) {
 			return ctx.return(unrewriteUrl(href, client.context));
 		},
 	});
+
+	// Trap the `.target` / `.formTarget` property setters. `element.setAttribute`
+	// already routes through the htmlRules target filter, but assigning the
+	// property directly (`a.target = "_top"; a.click()`) hits the native
+	// setter and bypasses that path entirely. Route both to the same
+	// `filterTarget` helper so the enforcement is uniform. A filtered-out
+	// value becomes an empty string on the property, which the browser
+	// treats as "no target" — the click/submit stays in the current frame.
+	const targetSetterTrap = {
+		set(ctx: any, value: any) {
+			const s = value == null ? "" : String(value);
+			const filtered = filterTarget(s, client.context, client.meta);
+			ctx.set(filtered == null ? "" : filtered);
+		},
+	};
+	client.Trap("HTMLAnchorElement.prototype.target", targetSetterTrap);
+	client.Trap("HTMLFormElement.prototype.target", targetSetterTrap);
+	client.Trap("HTMLBaseElement.prototype.target", targetSetterTrap);
+	client.Trap("HTMLAreaElement.prototype.target", targetSetterTrap);
+	client.Trap("HTMLButtonElement.prototype.formTarget", targetSetterTrap);
+	client.Trap("HTMLInputElement.prototype.formTarget", targetSetterTrap);
 
 	client.Trap(
 		[
