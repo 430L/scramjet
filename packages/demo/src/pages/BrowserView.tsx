@@ -200,11 +200,18 @@ const BrowserView: Component<
 				timeStyle: "short",
 			})
 		);
-		// percent-encoding, not base64. btoa() throws InvalidCharacterError on
-		// any codepoint above U+00FF, so a homepage containing non-Latin-1
-		// text — or a locale-formatted date, which is how this used to break —
-		// would take out the whole panel for those visitors only.
-		this.frameel.src = `data:text/html;charset=utf-8,${encodeURIComponent(realHomepage)}`;
+		// Use srcdoc, not a data: URL, for the initial homepage. The iframe is
+		// sandboxed (see the sandbox attribute below) as defense-in-depth so
+		// proxied content can never top-navigate the real tab. A data: URL is
+		// ALWAYS an opaque origin — even under allow-same-origin — and a
+		// sandboxed opaque-origin frame broke same-origin service-worker
+		// interception and dreamland's stylesheet scoping (the "sheet is null"
+		// black screen that forced the previous sandbox revert). A srcdoc
+		// document under allow-same-origin instead inherits the embedder's
+		// origin, keeping the frame same-origin so both the SW and CSS scoping
+		// work. Frame.go() removes this attribute before navigating, so srcdoc
+		// only governs the first paint.
+		this.frameel.srcdoc = realHomepage;
 	};
 
 	return (
@@ -216,8 +223,21 @@ const BrowserView: Component<
 			{/* The iframe is an unconditional child: it must never be swapped
 			    out by a reactive re-render, or a later state change would
 			    silently replace the live frame with a fresh blank one. The
-			    error state is an overlay stacked on top of it instead. */}
-			<iframe this={use(this.frameel)}></iframe>
+			    error state is an overlay stacked on top of it instead.
+
+			    The sandbox is defense-in-depth for the address-bar invariant:
+			    it deliberately OMITS allow-top-navigation*, allow-popups* so
+			    proxied content physically cannot navigate the real tab or open
+			    a new top-level context exposing the origin — the same token set
+			    the trampoline launcher uses. allow-same-origin is required for
+			    the service worker + storage the proxy depends on; combined with
+			    the srcdoc homepage (not a data: URL) it keeps the frame
+			    same-origin, avoiding the opaque-origin black screen that forced
+			    the earlier revert. */}
+			<iframe
+				this={use(this.frameel)}
+				sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-storage-access-by-user-activation allow-pointer-lock allow-orientation-lock allow-presentation"
+			></iframe>
 			<div
 				class={use(this.error).map(
 					(error) => `panel-error ${error ? "shown" : ""}`

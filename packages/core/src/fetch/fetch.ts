@@ -87,7 +87,12 @@ export async function doHandleFetch(
 		response.rawHeaders
 	);
 
-	if (isRedirect(response)) {
+	if (isRedirect(response) && responseHeaders.has("location")) {
+		// A redirect status does not guarantee a Location header — a bare 304
+		// Not Modified, or a malformed 3xx, can arrive without one. isRedirect
+		// matches the whole 300-399 range, so guard on the header's presence:
+		// without it `new _URL(null)` throws and aborts the proxied response
+		// (strictly worse than passing the response through untouched).
 		const location = new _URL(responseHeaders.get("location"));
 		const referer = newheaders.get("Referer");
 

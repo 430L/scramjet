@@ -935,6 +935,11 @@ export class Frame {
 			//@ts-expect-error
 			base: new URL(location.href),
 		});
+		// srcdoc takes precedence over src per the HTML spec, so a frame whose
+		// initial document was set via srcdoc (e.g. an embedder homepage) would
+		// ignore this navigation until the attribute is gone. Remove it first.
+		if (this.element.hasAttribute("srcdoc"))
+			this.element.removeAttribute("srcdoc");
 		this.element.src = encoded;
 	}
 }

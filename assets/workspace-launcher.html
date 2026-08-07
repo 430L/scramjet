@@ -119,10 +119,6 @@
 
 			<button id="open-workspace" type="button">Launch</button>
 			<div id="status" role="status" aria-live="polite"></div>
-
-			<a id="direct" class="direct-link" target="_blank" rel="noopener noreferrer"
-				>Open directly</a
-			>
 		</main>
 
 		<script>
@@ -168,7 +164,34 @@
 				var targetUrl = resolveTargetUrl();
 				var launchButton = document.getElementById("open-workspace");
 				var status = document.getElementById("status");
-				document.getElementById("direct").href = targetUrl;
+
+				// This launcher MUST be served from a different origin than the
+				// proxy. window.open("about:blank") makes the new tab inherit
+				// THIS page's origin; the injected iframe keeps its own (proxy)
+				// origin because it needs allow-same-origin for the service
+				// worker. If they match, the sandboxed iframe is same-origin
+				// with the non-sandboxed shell and can script it into navigating
+				// the real tab, defeating the sandbox. Refuse to launch in that
+				// case (it is also pointless: a launcher on a blocked proxy
+				// origin is itself blocked). Host this file elsewhere — a local
+				// file, an extension page, or any non-proxy domain.
+				function isSameOriginAsProxy() {
+					try {
+						return new URL(targetUrl).origin === location.origin;
+					} catch (e) {
+						return false;
+					}
+				}
+
+				function showSameOriginError() {
+					launchButton.style.display = "none";
+					status.textContent =
+						"This launcher can't run from the proxy's own origin (" +
+						location.origin +
+						"). Host it on a different origin — a local file, an " +
+						"extension page, or any non-proxy domain — so the " +
+						"about:blank tab can keep the real URL bar hidden.";
+				}
 
 				function escapeAttr(s) {
 					return String(s)
@@ -218,22 +241,16 @@
 						retry.onclick = function () {
 							// Reload the whole shell rather than just resetting
 							// the iframe src: a failed boot can leave a
-							// half-registered service worker behind.
+							// half-registered service worker behind. Staying on
+							// about:blank, this never exposes the origin.
 							location.reload();
 						};
 
-						var direct = document.createElement("button");
-						direct.type = "button";
-						direct.textContent = "Open directly";
-						direct.onclick = function () {
-							// Escape hatch only — this puts the real origin in
-							// the URL bar, which is what the trampoline exists
-							// to avoid. Never automatic.
-							window.open(target, "_blank", "noopener");
-						};
-
+						// No "open directly" button: it opened a real top-level
+						// tab on the raw proxy origin, exposing exactly the URL
+						// this trampoline hides (and landing on the block page on
+						// a filtered network). Retrying is the only safe recovery.
 						actions.appendChild(retry);
-						actions.appendChild(direct);
 					}
 
 					// The only trustworthy success signal. The iframe is
@@ -273,6 +290,11 @@
 				}
 
 				launchButton.addEventListener("click", function () {
+					if (isSameOriginAsProxy()) {
+						showSameOriginError();
+						return;
+					}
+
 					var frameWindow = window.open("about:blank", "_blank");
 
 					if (!frameWindow) {
@@ -340,6 +362,10 @@
 
 					status.textContent = "Workspace opened in a new tab.";
 				});
+
+				// Surface a misconfigured (same-origin) deployment on load, not
+				// just on click.
+				if (isSameOriginAsProxy()) showSameOriginError();
 			})();
 		</script>
 	</body>

@@ -40,7 +40,16 @@
 
 		The invariant this file protects: **the URL bar of the launched tab
 		stays on `about:blank` forever, regardless of what proxied content
-		tries to do.** Two layers make that hold:
+		tries to do.**
+
+		PREREQUISITE (enforced at runtime): this launcher MUST be served from a
+		different origin than the proxy. The about:blank tab inherits THIS
+		page's origin, while the injected iframe keeps the proxy origin (it
+		needs allow-same-origin for the service worker). If those match, the
+		sandboxed iframe is same-origin with the non-sandboxed shell and can
+		script it into navigating the real tab, bypassing the sandbox entirely.
+		`isSameOriginAsProxy()` below refuses to launch in that case. With that
+		held, two layers make the invariant stick:
 
 		1. TRAMPOLINE PATTERN.
 		   A user gesture (the Launch button) calls
@@ -120,6 +129,44 @@
 		}
 
 		var PROXY_URL = resolveProxyUrl();
+
+		// The trampoline's guarantee is only physical when this launcher is
+		// served from a DIFFERENT origin than the proxy. window.open("about:blank")
+		// makes the new tab inherit THIS page's origin; the injected iframe keeps
+		// its own (proxy) origin because it needs allow-same-origin for the
+		// service worker. If those two origins match, the sandboxed iframe is
+		// same-origin with the non-sandboxed shell and can reach into the shell's
+		// realm (parent.eval, injecting a <script>, or stripping the sandbox
+		// attribute) to make the shell navigate the real tab — defeating the
+		// whole point. So refuse to launch in that configuration. (It is also
+		// self-defeating: a launcher hosted on a blocked proxy origin is itself
+		// blocked.) Host launcher.html anywhere else — a local file, an extension
+		// page, or any non-proxy domain.
+		function isSameOriginAsProxy() {
+			try {
+				return new URL(PROXY_URL).origin === location.origin;
+			} catch (e) {
+				return false;
+			}
+		}
+
+		function showSameOriginError() {
+			var launcher = document.getElementById("launcher");
+			if (!launcher) return;
+			launcher.textContent = "";
+			var title = document.createElement("p");
+			title.textContent =
+				"This launcher can't run from the proxy's own origin.";
+			var detail = document.createElement("p");
+			detail.textContent =
+				"It is being served from " + location.origin + ", the same origin " +
+				"as the proxy. The about:blank trampoline can only keep the real " +
+				"URL bar hidden when the launcher is hosted on a different origin. " +
+				"Host launcher.html somewhere else — a local file, a browser " +
+				"extension page, or any non-proxy domain — and open it from there.";
+			launcher.appendChild(title);
+			launcher.appendChild(detail);
+		}
 
 		// How long to wait for the app to report a successful boot before
 		// declaring the launch failed. Deliberately generous: a host that
@@ -215,23 +262,20 @@
 				retry.onclick = function () {
 					// Full reload of the shell, not just the iframe: a failed
 					// boot can leave a half-registered service worker behind,
-					// and re-pointing src alone would inherit it.
+					// and re-pointing src alone would inherit it. location.reload
+					// stays on about:blank, so it never exposes the origin.
 					location.reload();
 				};
 
-				var direct = document.createElement("button");
-				direct.type = "button";
-				direct.textContent = "Open directly";
-				direct.onclick = function () {
-					// Escape hatch only. This exposes the proxy origin in the
-					// URL bar, which is exactly what the trampoline exists to
-					// avoid — so it is a button the user must choose, never
-					// something that happens automatically.
-					window.open(proxyUrl, "_blank", "noopener");
-				};
-
+				// There is deliberately NO "open directly" button here. It used
+				// to window.open(proxyUrl) as an escape hatch, but that opens a
+				// real top-level tab showing the raw proxy origin in the address
+				// bar — exactly the exposure this trampoline exists to prevent,
+				// and on a blocked host it lands the user on the block page. A
+				// boot failure is almost always a cold-starting host; retrying
+				// (or waiting) is the only safe recovery, so that is all we
+				// offer.
 				acts.appendChild(retry);
-				acts.appendChild(direct);
 			}
 
 			// The app posts this once its service worker and proxy runtime are
@@ -264,6 +308,14 @@
 		}
 
 		function launch() {
+			// Refuse if the shell would be same-origin with the proxy iframe —
+			// the sandbox is not a real wall in that configuration (see
+			// isSameOriginAsProxy above).
+			if (isSameOriginAsProxy()) {
+				showSameOriginError();
+				return;
+			}
+
 			// Must be inside the click handler for the popup-blocker
 			// heuristic to treat this as user-initiated.
 			var win = window.open("about:blank");
@@ -316,7 +368,14 @@
 			}
 		}
 
-		document.getElementById("go").addEventListener("click", launch);
+		// Surface the misconfiguration immediately rather than waiting for a
+		// click, so a launcher accidentally deployed onto the proxy origin is
+		// obvious on load.
+		if (isSameOriginAsProxy()) {
+			showSameOriginError();
+		} else {
+			document.getElementById("go").addEventListener("click", launch);
+		}
 	</script>
 </body>
 </html>

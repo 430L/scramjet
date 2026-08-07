@@ -42,6 +42,50 @@ function refreshNavigationServerTest(props: { name: string; content: string }) {
 	});
 }
 
+// The `Refresh:` *response header* shares the declarative-refresh grammar with
+// `<meta http-equiv="refresh">`, but its URL is frequently BARE (no `url=`).
+// The proxy must rewrite it the same way; a passed-through bare header would
+// send the browser to the raw target and expose the origin in the address bar.
+function refreshHeaderNavigationServerTest(props: {
+	name: string;
+	header: string;
+}) {
+	return serverTest({
+		name: props.name,
+		start: async (server, _port, { pass }) => {
+			server.on("request", (req, res) => {
+				if (req.url === "/") {
+					res.writeHead(200, {
+						"Content-Type": "text/html",
+						Refresh: props.header,
+					});
+					res.end(
+						"<!doctype html><html><head></head><body>ok</body></html>"
+					);
+					return;
+				}
+
+				if (req.url === "/next/page.html") {
+					res.writeHead(200, { "Content-Type": "text/html" });
+					res.end("<!doctype html><html><body>next</body></html>");
+					pass("refresh-header navigation reached origin server");
+					return;
+				}
+
+				if (req.url === "/favicon.ico") {
+					res.writeHead(204);
+					res.end();
+					return;
+				}
+
+				res.writeHead(404, { "Content-Type": "text/plain" });
+				res.end("Not found");
+			});
+		},
+		autoPass: false,
+	});
+}
+
 export default [
 	refreshNavigationServerTest({
 		name: "rewriter-refresh-lowercase-url-label",
@@ -54,6 +98,16 @@ export default [
 	refreshNavigationServerTest({
 		name: "rewriter-refresh-quoted-url",
 		content: "0; URL='/next/page.html'",
+	}),
+	// Response-header variants. The bare-URL case is the regression: the old
+	// `url=`-only regex passed it through unrewritten.
+	refreshHeaderNavigationServerTest({
+		name: "rewriter-refresh-header-bare-url",
+		header: "0; /next/page.html",
+	}),
+	refreshHeaderNavigationServerTest({
+		name: "rewriter-refresh-header-url-label",
+		header: "0; url=/next/page.html",
 	}),
 	serverTest({
 		name: "rewriter-refresh-time-only",

@@ -13,6 +13,7 @@ import {
 import { RawHeaders } from "@mercuryworkshop/proxy-transports";
 import { _URL, _Set } from "@/shared/snapshot";
 import { createReferrerString } from "./util";
+import { parseDeclarativeRefresh } from "@/shared/refresh";
 
 /**
  * Headers for security policy features that haven't been emulated yet
@@ -61,38 +62,35 @@ function rewriteLinkHeader(
 /**
  * Rewrite the URL portion of a `Refresh:` response header.
  *
- * Grammar (HTTP-style, matching browser behaviour of the equivalent
- * `<meta http-equiv="refresh">`): a non-negative delay in seconds, optionally
- * followed by `;` or `,`, then optional whitespace, then `url=` (case
- * insensitive) then the URL. The URL may be bare, single-quoted, or
- * double-quoted. Missing `url=` means "reload the current page" — in that
- * case there is no URL to rewrite; pass the header through unchanged.
+ * The header shares its grammar with `<meta http-equiv="refresh">` (the
+ * declarative-refresh syntax): a non-negative delay in seconds, optionally
+ * followed by `;` or `,` and then the URL. Crucially the URL may appear with
+ * an explicit `url=` label OR bare (e.g. `Refresh: 0; /next`), quoted or not,
+ * relative or absolute. The previous regex here only matched the `url=` form
+ * and passed a bare-URL refresh through unchanged — a real top-level browser
+ * navigation to the *raw* target, escaping the confineNavigation guard and
+ * exposing the underlying origin in the address bar.
  *
- * Without this rewrite, a proxied response returning `Refresh: 0;url=…`
- * would trigger a real top-level browser navigation to the raw target URL,
- * escaping any confineNavigation guard the runtime installs on the page.
+ * Reuse `parseDeclarativeRefresh` — the same spec-faithful parser the `<meta>`
+ * path already trusts (see `rewriters/html.ts`) — so both refresh vectors are
+ * rewritten identically. A time-only header (no URL, meaning "reload the
+ * current page") returns `url: null` and is passed through unchanged. The
+ * parser's `urlStart`/`urlEnd` bracket the URL *inside* any surrounding
+ * quotes, so splicing preserves the quoting exactly.
  */
 function rewriteRefreshHeader(
 	refresh: string,
 	context: AkContext,
 	meta: URLMeta
 ): string {
-	const match = /^(\s*[0-9.]+\s*[;,]?\s*url\s*=\s*)(.*)$/i.exec(refresh);
-	if (!match) return refresh;
-	const prefix = match[1];
-	let rest = match[2];
-	// Peel a matching pair of surrounding quotes, if any.
-	let quote = "";
-	if (rest.length >= 2 && (rest[0] === '"' || rest[0] === "'")) {
-		const q = rest[0];
-		const end = rest.lastIndexOf(q);
-		if (end > 0) {
-			quote = q;
-			rest = rest.slice(1, end);
-		}
-	}
-	const rewritten = rewriteUrl(rest, context, meta);
-	return `${prefix}${quote}${rewritten}${quote}`;
+	const parsed = parseDeclarativeRefresh(refresh);
+	if (!parsed || parsed.url === null || parsed.url.length === 0) return refresh;
+	const rewritten = rewriteUrl(parsed.url.trim(), context, meta);
+	return (
+		refresh.slice(0, parsed.urlStart) +
+		rewritten +
+		refresh.slice(parsed.urlEnd)
+	);
 }
 
 export async function rewriteResponseHeaders(

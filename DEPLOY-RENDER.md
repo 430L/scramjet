@@ -142,6 +142,18 @@ proxy origin — use the canonical trampoline HTML at
 [`assets/launcher.html`](assets/launcher.html). Open it directly, or ship it
 as your launcher's built-in page.
 
+**Host the launcher on a different origin than the proxy — this is
+mandatory, and the launcher now refuses to run otherwise.** The `about:blank`
+tab inherits the launcher page's origin, while the injected iframe keeps the
+proxy (onrender) origin because it needs `allow-same-origin` for the service
+worker. If the launcher is served *from* the proxy origin, those two match, and
+a same-origin sandboxed iframe can reach into the non-sandboxed shell and drive
+it to navigate the real tab — defeating the trampoline. Serving the launcher on
+onrender is also self-defeating on a blocked network, since that origin is the
+very thing being hidden. Put `launcher.html` on a local file (`file://`), a
+browser-extension page, GitHub Pages, or any non-proxy domain, and point its
+`PROXY_URL` at your onrender deployment.
+
 The pattern:
 
 1. A user gesture opens `window.open("about:blank")`.
